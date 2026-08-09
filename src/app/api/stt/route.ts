@@ -1,33 +1,26 @@
 import { NextResponse } from "next/server";
 
+const VERSION = "2026-03-01";
+
 /**
- * Transcribe one audio chunk with Cartesia. The browser records short clips
- * and posts them here, so the key never reaches the client.
+ * Mint a short-lived STT access token. Browsers can't set headers on a
+ * WebSocket, so the client connects with ?access_token=... instead — and the
+ * real API key never leaves the server.
  */
-export async function POST(req: Request) {
+export async function POST() {
   const key = process.env.CARTESIA_API_KEY;
   if (!key) {
     return NextResponse.json({ error: "CARTESIA_API_KEY not set" }, { status: 500 });
   }
 
-  const inbound = await req.formData();
-  const file = inbound.get("audio");
-  if (!(file instanceof Blob)) {
-    return NextResponse.json({ error: "expected an audio file" }, { status: 400 });
-  }
-
-  const form = new FormData();
-  form.append("file", file, "clip.webm");
-  form.append("model", "ink-whisper");
-  form.append("language", "en");
-
-  const res = await fetch("https://api.cartesia.ai/stt", {
+  const res = await fetch("https://api.cartesia.ai/access-token", {
     method: "POST",
     headers: {
-      "X-API-Key": key,
-      "Cartesia-Version": "2024-06-10",
+      Authorization: `Bearer ${key}`,
+      "Cartesia-Version": VERSION,
+      "Content-Type": "application/json",
     },
-    body: form,
+    body: JSON.stringify({ grants: { stt: true }, expires_in: 3600 }),
   });
 
   if (!res.ok) {
@@ -36,5 +29,5 @@ export async function POST(req: Request) {
   }
 
   const data = await res.json();
-  return NextResponse.json({ text: (data?.text ?? "").trim() });
+  return NextResponse.json({ token: data.token, version: VERSION });
 }

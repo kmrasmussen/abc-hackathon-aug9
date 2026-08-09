@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Mermaid from "./Mermaid";
 import { matchEvents, type LogEvent } from "@/lib/events";
+import { useStt } from "./useStt";
 
 /** A detected shape, in normalized 0–1 coordinates. */
 type Shape = { label: string; x: number; y: number; w: number; h: number };
@@ -59,10 +60,10 @@ export default function Home() {
   const [runError, setRunError] = useState<string | null>(null);
   const [events, setEvents] = useState<LogEvent[]>([]);
   const [sttOn, setSttOn] = useState(false);
-  const [sttError, setSttError] = useState<string | null>(null);
+
   const eventIdRef = useRef(0);
   const strokeBoxRef = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
+
   const [tool, setTool] = useState<"point" | "draw" | "erase">("draw");
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [pointed, setPointed] = useState<{ x: number; y: number } | null>(null);
@@ -238,6 +239,9 @@ export default function Home() {
   const logEvent = (e: Omit<LogEvent, "id" | "at">) =>
     setEvents((prev) => [...prev, { ...e, id: ++eventIdRef.current, at: Date.now() }]);
 
+  // Cartesia decides the turn boundaries; each finished turn becomes one event.
+  const stt = useStt(sttOn, (text) => logEvent({ kind: "speech", text }));
+
   const DEBOUNCE_MS = 5000;
 
   /** Restart the idle timer; the run only fires after a full quiet period. */
@@ -385,69 +389,6 @@ export default function Home() {
     }
   };
 
-  /**
-   * Record the mic in short clips and transcribe each one. Cheap and simple:
-   * no streaming socket, and each clip lands in the log at the time it ended.
-   */
-  useEffect(() => {
-    if (!sttOn) {
-      recorderRef.current?.stop();
-      recorderRef.current = null;
-      return;
-    }
-    let stopped = false;
-    let stream: MediaStream | null = null;
-
-    (async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        if (stopped) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        setSttError(null);
-
-        const cycle = () => {
-          if (stopped || !stream) return;
-          const rec = new MediaRecorder(stream);
-          recorderRef.current = rec;
-          const chunks: Blob[] = [];
-          rec.ondataavailable = (ev) => ev.data.size && chunks.push(ev.data);
-          rec.onstop = async () => {
-            const blob = new Blob(chunks, { type: "audio/webm" });
-            if (blob.size > 2000) {
-              try {
-                const fd = new FormData();
-                fd.append("audio", blob);
-                const res = await fetch("/api/stt", { method: "POST", body: fd });
-                const data = await res.json();
-                const text = (data.text ?? "").trim();
-                // Whisper emits "." or "you" for silence — skip those.
-                if (res.ok && text.length > 2) logEvent({ kind: "speech", text });
-                else if (!res.ok) setSttError(data.error ?? `stt ${res.status}`);
-              } catch (err) {
-                setSttError(String(err));
-              }
-            }
-            cycle();
-          };
-          rec.start();
-          setTimeout(() => rec.state !== "inactive" && rec.stop(), 4000);
-        };
-        cycle();
-      } catch (err) {
-        setSttError(err instanceof Error ? err.message : String(err));
-        setSttOn(false);
-      }
-    })();
-
-    return () => {
-      stopped = true;
-      recorderRef.current?.stop();
-      stream?.getTracks().forEach((t) => t.stop());
-    };
-  }, [sttOn]);
-
   /** Manual trigger — same path as the debounced one. */
   const onShowToLlm = () => {
     const canvas = canvasRef.current;
@@ -592,7 +533,15 @@ export default function Home() {
             />
             STT
           </label>
-          {sttError && <span className="text-xs text-rose-600">{sttError.slice(0, 40)}</span>}
+          {sttOn && stt.live && !stt.partial && (
+            <span className="text-xs text-fuchsia-600">listening…</span>
+          )}
+          {stt.partial && (
+            <span className="min-w-0 flex-1 truncate text-xs italic text-fuchsia-600">
+              {stt.partial}
+            </span>
+          )}
+          {stt.error && <span className="text-xs text-rose-600">{stt.error.slice(0, 40)}</span>}
           {events.length > 0 && (
             <button
               onClick={() => setEvents([])}
