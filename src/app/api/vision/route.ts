@@ -20,12 +20,18 @@ Rules for the Mermaid code:
 - Node ids must be simple alphanumeric (A, B, C, N1...). Put labels in brackets.
 - Output only valid Mermaid inside the tags. No comments, no markdown fences.
 
-Finally, locate every node on the image. Use box_2d as [ymin, xmin, ymax, xmax]
-normalized to a 1000x1000 grid, and set "label" to exactly the node label you
-used in the Mermaid. Wrap it in tags exactly like this:
+Finally, locate every node AND every arrow on the image. Use box_2d as
+[ymin, xmin, ymax, xmax] normalized to a 1000x1000 grid.
+
+- For a node, set "label" to exactly the node label you used in the Mermaid.
+- For an arrow, set "label" to "<from> -> <to>" using those same node labels,
+  and box the whole arrow including its shaft, not just the head.
+
+Wrap it in tags exactly like this:
 
 <boxes>
-[{"box_2d": [100, 200, 300, 400], "label": "Label"}]
+[{"box_2d": [100, 200, 300, 400], "label": "Label"},
+ {"box_2d": [300, 200, 500, 400], "label": "Label -> Other"}]
 </boxes>
 
 Output only JSON inside the boxes tags.`;

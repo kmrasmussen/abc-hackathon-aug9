@@ -364,12 +364,17 @@ export default function Home() {
       if (res.ok) {
         setMermaid(data.mermaid ?? null);
         setRawReply(data.raw ?? null);
-        const vb = data.boxes ?? [];
+        type VB = { label: string; x: number; y: number; w: number; h: number };
+        const vb: VB[] = data.boxes ?? [];
         setVisionBoxes(vb);
-        // Gemma located the nodes in the same call, so map is already done.
+        // Gemma located everything in the same call, so map is already done.
+        // Arrow boxes are labelled "from -> to"; nodes are everything else.
         if (vb.length) {
+          const arrowBoxes = vb.filter((b) => b.label.includes("->"));
+          const nodeBoxes = vb.filter((b) => !b.label.includes("->"));
+
           setNodes(
-            vb.map((b: { label: string; x: number; y: number; w: number; h: number }, i: number) => ({
+            nodeBoxes.map((b, i) => ({
               id: String.fromCharCode(65 + i),
               label: b.label,
               found: true,
@@ -379,6 +384,15 @@ export default function Home() {
               h: b.h,
             })),
           );
+
+          if (arrowBoxes.length) {
+            setEdges(
+              arrowBoxes.map((b) => {
+                const [from, to] = b.label.split("->").map((t) => t.trim());
+                return { from, to, found: true, x: b.x, y: b.y, w: b.w, h: b.h };
+              }),
+            );
+          }
         }
       }
     } catch (err) {
