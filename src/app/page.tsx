@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Mermaid from "./Mermaid";
+import { matchEvents, type LogEvent } from "@/lib/events";
 
 /** A detected shape, in normalized 0–1 coordinates. */
 type Shape = { label: string; x: number; y: number; w: number; h: number };
@@ -56,6 +57,12 @@ export default function Home() {
   const [showCode, setShowCode] = useState(false);
   const [committed, setCommitted] = useState<Committed | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  const [events, setEvents] = useState<LogEvent[]>([]);
+  const [sttOn, setSttOn] = useState(false);
+  const [sttError, setSttError] = useState<string | null>(null);
+  const eventIdRef = useRef(0);
+  const strokeBoxRef = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
   const [tool, setTool] = useState<"point" | "draw" | "erase">("draw");
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [pointed, setPointed] = useState<{ x: number; y: number } | null>(null);
@@ -76,6 +83,19 @@ export default function Home() {
   const edges = committed?.edges ?? null;
   const visionBoxes = committed?.boxes ?? [];
   const rawReply = committed?.raw ?? null;
+
+  // Events gain their match retroactively, from whatever the last run committed.
+  const labelled = [
+    ...(committed?.nodes ?? []).map((n) => ({
+      label: n.label,
+      box: { x: n.x ?? 0, y: n.y ?? 0, w: n.w ?? 0, h: n.h ?? 0 },
+    })),
+    ...(committed?.edges ?? []).map((e) => ({
+      label: `${e.from} -> ${e.to}`,
+      box: { x: e.x ?? 0, y: e.y ?? 0, w: e.w ?? 0, h: e.h ?? 0 },
+    })),
+  ];
+  const logged = matchEvents(events, labelled);
 
   const ctxOf = () => canvasRef.current?.getContext("2d") ?? null;
 
@@ -164,6 +184,10 @@ export default function Home() {
 
     e.currentTarget.setPointerCapture(e.pointerId);
     drawing.current = true;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const nx = p.x / rect.width;
+    const ny = p.y / rect.height;
+    strokeBoxRef.current = { x0: nx, y0: ny, x1: nx, y1: ny };
 
     if (tool === "erase") {
       eraseAt(ctx, p.x, p.y);
@@ -191,6 +215,17 @@ export default function Home() {
     const ctx = ctxOf();
     if (!ctx) return;
 
+    const r = e.currentTarget.getBoundingClientRect();
+    const b = strokeBoxRef.current;
+    if (b) {
+      const nx = p.x / r.width;
+      const ny = p.y / r.height;
+      b.x0 = Math.min(b.x0, nx);
+      b.y0 = Math.min(b.y0, ny);
+      b.x1 = Math.max(b.x1, nx);
+      b.y1 = Math.max(b.y1, ny);
+    }
+
     if (tool === "erase") {
       eraseAt(ctx, p.x, p.y);
       return;
@@ -199,6 +234,9 @@ export default function Home() {
     ctx.lineTo(p.x, p.y);
     ctx.stroke();
   };
+
+  const logEvent = (e: Omit<LogEvent, "id" | "at">) =>
+    setEvents((prev) => [...prev, { ...e, id: ++eventIdRef.current, at: Date.now() }]);
 
   const DEBOUNCE_MS = 5000;
 
@@ -216,8 +254,22 @@ export default function Home() {
   };
 
   const stop = () => {
+    if (pointing.current && pointed) {
+      logEvent({ kind: "point", box: { x: pointed.x, y: pointed.y, w: 0, h: 0 } });
+    }
     pointing.current = false;
-    if (drawing.current) scheduleRun();
+
+    if (drawing.current) {
+      const b = strokeBoxRef.current;
+      if (b) {
+        logEvent({
+          kind: tool === "erase" ? "erase" : "stroke",
+          box: { x: b.x0, y: b.y0, w: b.x1 - b.x0, h: b.y1 - b.y0 },
+        });
+      }
+      strokeBoxRef.current = null;
+      scheduleRun();
+    }
     drawing.current = false;
   };
 
@@ -332,6 +384,69 @@ export default function Home() {
       // clipboard blocked — the textarea below is the fallback
     }
   };
+
+  /**
+   * Record the mic in short clips and transcribe each one. Cheap and simple:
+   * no streaming socket, and each clip lands in the log at the time it ended.
+   */
+  useEffect(() => {
+    if (!sttOn) {
+      recorderRef.current?.stop();
+      recorderRef.current = null;
+      return;
+    }
+    let stopped = false;
+    let stream: MediaStream | null = null;
+
+    (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (stopped) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        setSttError(null);
+
+        const cycle = () => {
+          if (stopped || !stream) return;
+          const rec = new MediaRecorder(stream);
+          recorderRef.current = rec;
+          const chunks: Blob[] = [];
+          rec.ondataavailable = (ev) => ev.data.size && chunks.push(ev.data);
+          rec.onstop = async () => {
+            const blob = new Blob(chunks, { type: "audio/webm" });
+            if (blob.size > 2000) {
+              try {
+                const fd = new FormData();
+                fd.append("audio", blob);
+                const res = await fetch("/api/stt", { method: "POST", body: fd });
+                const data = await res.json();
+                const text = (data.text ?? "").trim();
+                // Whisper emits "." or "you" for silence — skip those.
+                if (res.ok && text.length > 2) logEvent({ kind: "speech", text });
+                else if (!res.ok) setSttError(data.error ?? `stt ${res.status}`);
+              } catch (err) {
+                setSttError(String(err));
+              }
+            }
+            cycle();
+          };
+          rec.start();
+          setTimeout(() => rec.state !== "inactive" && rec.stop(), 4000);
+        };
+        cycle();
+      } catch (err) {
+        setSttError(err instanceof Error ? err.message : String(err));
+        setSttOn(false);
+      }
+    })();
+
+    return () => {
+      stopped = true;
+      recorderRef.current?.stop();
+      stream?.getTracks().forEach((t) => t.stop());
+    };
+  }, [sttOn]);
 
   /** Manual trigger — same path as the debounced one. */
   const onShowToLlm = () => {
@@ -464,6 +579,65 @@ export default function Home() {
               />
             )}
           </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <h2 className={label}>Log</h2>
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-neutral-700">
+            <input
+              type="checkbox"
+              checked={sttOn}
+              onChange={(e) => setSttOn(e.target.checked)}
+              className="h-3.5 w-3.5 accent-black"
+            />
+            STT
+          </label>
+          {sttError && <span className="text-xs text-rose-600">{sttError.slice(0, 40)}</span>}
+          {events.length > 0 && (
+            <button
+              onClick={() => setEvents([])}
+              className="text-[10px] text-neutral-500 underline hover:text-black"
+            >
+              clear
+            </button>
+          )}
+        </div>
+        <div className="h-40 shrink-0 overflow-auto rounded-lg border-2 border-black bg-white p-2">
+          {logged.length === 0 ? (
+            <span className="text-xs text-neutral-400">nothing yet</span>
+          ) : (
+            <ul className="flex flex-col gap-0.5 text-xs">
+              {logged.map((e) => (
+                <li key={e.id} className="flex items-baseline gap-2">
+                  <span className="w-14 shrink-0 tabular-nums text-neutral-400">
+                    {new Date(e.at).toLocaleTimeString([], {
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
+                  </span>
+                  <span
+                    className={`w-12 shrink-0 ${
+                      e.kind === "speech"
+                        ? "text-fuchsia-600"
+                        : e.kind === "point"
+                          ? "text-amber-600"
+                          : e.kind === "erase"
+                            ? "text-neutral-400"
+                            : "text-neutral-700"
+                    }`}
+                  >
+                    {e.kind}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-black">{e.text ?? ""}</span>
+                  {e.match && (
+                    <span className="shrink-0 rounded bg-blue-100 px-1 text-blue-700">
+                      {e.match}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </section>
 
