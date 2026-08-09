@@ -62,14 +62,35 @@ export default function Mermaid({
     host
       .querySelectorAll(".is-listening, .is-listening-marker")
       .forEach((el) => el.classList.remove("is-listening", "is-listening-marker"));
+    // Restore any link we pointed at a cloned marker.
+    host.querySelectorAll("[data-marker-end]").forEach((el) => {
+      el.setAttribute("marker-end", el.getAttribute("data-marker-end") ?? "");
+      el.removeAttribute("data-marker-end");
+    });
     if (!highlight) return;
 
     const markLink = (path: Element) => {
       path.classList.add("is-listening");
-      // The head is a separate <marker> referenced by url(#id) — colour it too.
+
+      // Every arrow shares ONE <marker> definition, so recolouring it would
+      // turn all arrowheads purple. Clone it into a private marker instead and
+      // point only this link at the copy.
       const ref = path.getAttribute("marker-end") ?? "";
       const markerId = ref.match(/url\(#(.+?)\)/)?.[1];
-      if (markerId) host.querySelector(`#${CSS.escape(markerId)}`)?.classList.add("is-listening-marker");
+      if (!markerId) return;
+      const original = host.querySelector(`#${CSS.escape(markerId)}`);
+      if (!original) return;
+
+      const cloneId = `${markerId}-listening`;
+      let clone = host.querySelector(`#${CSS.escape(cloneId)}`);
+      if (!clone) {
+        clone = original.cloneNode(true) as Element;
+        clone.id = cloneId;
+        original.parentNode?.appendChild(clone);
+      }
+      clone.classList.add("is-listening-marker");
+      path.setAttribute("data-marker-end", ref);
+      path.setAttribute("marker-end", `url(#${cloneId})`);
     };
 
     if (highlight.includes("->")) {
@@ -143,8 +164,9 @@ export default function Mermaid({
           stroke-width: 3px !important;
           opacity: 1 !important;
         }
-        .mermaid-host svg marker.is-listening path,
-        .mermaid-host svg marker.is-listening,
+        /* Only the cloned marker is recoloured, so other arrowheads stay grey. */
+        .mermaid-host svg marker.is-listening-marker path,
+        .mermaid-host svg marker.is-listening-marker polygon,
         .mermaid-host svg .is-listening-marker path {
           fill: #7c3aed !important;
           stroke: #7c3aed !important;
