@@ -54,6 +54,11 @@ export default function Home() {
     { label: string; x: number; y: number; w: number; h: number }[]
   >([]);
   const [rawReply, setRawReply] = useState<string | null>(null);
+  const [auto, setAuto] = useState(true);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const historyRef = useRef<{ image: string; reply: string }[]>([]);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const runIdRef = useRef(0);
   const [dumpText, setDumpText] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -109,6 +114,13 @@ export default function Home() {
     return () => ro.disconnect();
   }, []);
 
+  useEffect(() => {
+    if (countdown === null) return;
+    if (countdown <= 0) return;
+    const t = setTimeout(() => setCountdown((c) => (c === null ? null : c - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [countdown]);
+
   const posOf = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
@@ -135,7 +147,23 @@ export default function Home() {
     ctx.stroke();
   };
 
+  const DEBOUNCE_MS = 5000;
+
+  /** Restart the idle timer; the run only fires after a full quiet period. */
+  const scheduleRun = () => {
+    if (!auto) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setCountdown(DEBOUNCE_MS / 1000);
+    debounceRef.current = setTimeout(() => {
+      setCountdown(null);
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      runVision(canvas.toDataURL("image/png"));
+    }, DEBOUNCE_MS);
+  };
+
   const stop = () => {
+    if (drawing.current) scheduleRun();
     drawing.current = false;
   };
 
@@ -345,8 +373,10 @@ export default function Home() {
     }
   };
 
-  const onShowToLlm = async () => {
-    if (!capture) return;
+  /** Send one frame to Gemma, with the previous turn as conversation history. */
+  const runVision = async (img: string) => {
+    const myRun = ++runIdRef.current;
+    setCapture(img);
     setAsking(true);
     setAnswer(null);
     setMermaid(null);
@@ -357,49 +387,62 @@ export default function Home() {
       const res = await fetch("/api/vision", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: capture }),
+        body: JSON.stringify({ image: img, history: historyRef.current }),
       });
       const data = await res.json();
+      // A newer run started while this was in flight — drop this result.
+      if (myRun !== runIdRef.current) return;
+
       setAnswer(res.ok ? data.text : `error: ${data.error ?? res.status}`);
-      if (res.ok) {
-        setMermaid(data.mermaid ?? null);
-        setRawReply(data.raw ?? null);
-        type VB = { label: string; x: number; y: number; w: number; h: number };
-        const vb: VB[] = data.boxes ?? [];
-        setVisionBoxes(vb);
-        // Gemma located everything in the same call, so map is already done.
-        // Arrow boxes are labelled "from -> to"; nodes are everything else.
-        if (vb.length) {
-          const arrowBoxes = vb.filter((b) => b.label.includes("->"));
-          const nodeBoxes = vb.filter((b) => !b.label.includes("->"));
+      if (!res.ok) return;
 
-          setNodes(
-            nodeBoxes.map((b, i) => ({
-              id: String.fromCharCode(65 + i),
-              label: b.label,
-              found: true,
-              x: b.x,
-              y: b.y,
-              w: b.w,
-              h: b.h,
-            })),
+      setMermaid(data.mermaid ?? null);
+      setRawReply(data.raw ?? null);
+
+      if (data.raw) {
+        historyRef.current = [{ image: img, reply: data.raw }];
+      }
+
+      type VB = { label: string; x: number; y: number; w: number; h: number };
+      const vb: VB[] = data.boxes ?? [];
+      setVisionBoxes(vb);
+      if (vb.length) {
+        const arrowBoxes = vb.filter((b) => b.label.includes("->"));
+        const nodeBoxes = vb.filter((b) => !b.label.includes("->"));
+        setNodes(
+          nodeBoxes.map((b, i) => ({
+            id: String.fromCharCode(65 + i),
+            label: b.label,
+            found: true,
+            x: b.x,
+            y: b.y,
+            w: b.w,
+            h: b.h,
+          })),
+        );
+        if (arrowBoxes.length) {
+          setEdges(
+            arrowBoxes.map((b) => {
+              const [from, to] = b.label.split("->").map((t) => t.trim());
+              return { from, to, found: true, x: b.x, y: b.y, w: b.w, h: b.h };
+            }),
           );
-
-          if (arrowBoxes.length) {
-            setEdges(
-              arrowBoxes.map((b) => {
-                const [from, to] = b.label.split("->").map((t) => t.trim());
-                return { from, to, found: true, x: b.x, y: b.y, w: b.w, h: b.h };
-              }),
-            );
-          }
         }
       }
     } catch (err) {
-      setAnswer(`error: ${String(err)}`);
+      if (myRun === runIdRef.current) setAnswer(`error: ${String(err)}`);
     } finally {
-      setAsking(false);
+      if (myRun === runIdRef.current) setAsking(false);
     }
+  };
+
+  /** Manual trigger — same path as the debounced one. */
+  const onShowToLlm = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setCountdown(null);
+    runVision(canvas.toDataURL("image/png"));
   };
 
   const label = "text-xs uppercase tracking-widest text-neutral-500";
@@ -443,12 +486,30 @@ export default function Home() {
           >
             Clear
           </button>
+          <label className="flex cursor-pointer items-center gap-1.5 text-sm text-neutral-700">
+            <input
+              type="checkbox"
+              checked={auto}
+              onChange={(e) => {
+                setAuto(e.target.checked);
+                if (!e.target.checked && debounceRef.current) {
+                  clearTimeout(debounceRef.current);
+                  setCountdown(null);
+                }
+              }}
+              className="h-4 w-4 accent-black"
+            />
+            auto
+          </label>
+          {countdown !== null && (
+            <span className="text-xs text-neutral-500">running in {countdown}s…</span>
+          )}
           <button
             onClick={onShowToLlm}
-            disabled={!capture || asking}
+            disabled={asking}
             className="rounded-md bg-black px-4 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-30"
           >
-            {asking ? "Looking…" : "Show picture to LLM"}
+            {asking ? "Looking…" : "Run now"}
           </button>
           <button
             onClick={onDetect}
