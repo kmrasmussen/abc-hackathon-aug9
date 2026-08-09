@@ -98,6 +98,24 @@ export default function Home() {
   ];
   const logged = matchEvents(events, labelled);
 
+  // Which committed label the pointer is currently inside — drives the
+  // "listening" highlight in the rendered mermaid.
+  const pointedLabel = (() => {
+    if (!pointed) return null;
+    for (const l of labelled) {
+      const b = l.box;
+      if (
+        pointed.x >= b.x &&
+        pointed.x <= b.x + b.w &&
+        pointed.y >= b.y &&
+        pointed.y <= b.y + b.h
+      ) {
+        return l.label;
+      }
+    }
+    return null;
+  })();
+
   const ctxOf = () => canvasRef.current?.getContext("2d") ?? null;
 
   const styleCtx = (ctx: CanvasRenderingContext2D) => {
@@ -176,7 +194,10 @@ export default function Home() {
 
     // Pointing doesn't modify the canvas; it marks a spot and follows the drag.
     if (tool === "point") {
-      e.currentTarget.setPointerCapture(e.pointerId);
+      // Capture can throw for synthetic/unknown pointer ids; the mark still works.
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {}
       pointing.current = true;
       const rect = e.currentTarget.getBoundingClientRect();
       setPointed({ x: p.x / rect.width, y: p.y / rect.height });
@@ -456,8 +477,9 @@ export default function Home() {
               onPointerUp={stop}
               onPointerCancel={stop}
               onPointerLeave={() => {
+                // Only hide the eraser ring — pointer capture keeps the gesture
+                // alive, so ending it here would log a point on every move.
                 setCursor(null);
-                stop();
               }}
               className={`block h-full w-full touch-none bg-white ${
                 tool === "erase" ? "cursor-none" : "cursor-crosshair"
@@ -777,7 +799,7 @@ export default function Home() {
             showCode ? (
               <pre className="whitespace-pre-wrap text-xs leading-relaxed text-black">{mermaid}</pre>
             ) : (
-              <Mermaid code={mermaid} />
+              <Mermaid code={mermaid} highlight={pointedLabel} />
             )
           ) : (
             <span className="text-sm text-neutral-400">
