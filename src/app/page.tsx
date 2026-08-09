@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Mermaid from "./Mermaid";
-import { matchEvents, type LogEvent } from "@/lib/events";
+import { coalesce, matchEvents, type LogEvent } from "@/lib/events";
 import { useStt } from "./useStt";
 
 /** A detected shape, in normalized 0–1 coordinates. */
@@ -60,6 +60,7 @@ export default function Home() {
   const [runError, setRunError] = useState<string | null>(null);
   const [events, setEvents] = useState<LogEvent[]>([]);
   const [sttOn, setSttOn] = useState(false);
+  const [logView, setLogView] = useState<"coalesced" | "raw">("coalesced");
 
   const eventIdRef = useRef(0);
   const strokeBoxRef = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
@@ -97,6 +98,7 @@ export default function Home() {
     })),
   ];
   const logged = matchEvents(events, labelled);
+  const grouped = coalesce(logged);
 
   // Which committed label the pointer is currently inside — drives the
   // "listening" highlight in the rendered mermaid.
@@ -397,9 +399,21 @@ export default function Home() {
       L.push(`${e.from} -> ${e.to}   x=${n(e.x)} y=${n(e.y)} w=${n(e.w)} h=${n(e.h)}`);
     L.push("");
 
-    L.push(`--- event log (${logged.length}) ---`);
-    if (!logged.length) L.push("(nothing yet)");
     const t0 = logged[0]?.at;
+    L.push(`--- coalesced log (${grouped.length} of ${logged.length} raw) ---`);
+    if (!grouped.length) L.push("(nothing yet)");
+    for (const g of grouped) {
+      const a = t0 === undefined ? 0 : (g.from - t0) / 1000;
+      const b = t0 === undefined ? 0 : (g.at - t0) / 1000;
+      const span = g.count > 1 ? `+${a.toFixed(1)}-${b.toFixed(1)}s` : `+${b.toFixed(1)}s`;
+      const times = g.count > 1 ? ` x${g.count}` : "";
+      const text = g.text ? ` "${g.text}"` : "";
+      const match = g.match ? `  -> ${g.match}` : "";
+      L.push(`${span.padEnd(16)}${g.kind.padEnd(6)}${times}${text}${match}`);
+    }
+    L.push("");
+
+    L.push(`--- raw log (${logged.length}) ---`);
     for (const ev of logged) {
       const dt = t0 === undefined ? 0 : (ev.at - t0) / 1000;
       const where = ev.box
@@ -581,6 +595,21 @@ export default function Home() {
             </span>
           )}
           {stt.error && <span className="text-xs text-rose-600">{stt.error.slice(0, 40)}</span>}
+          <div className="flex gap-1">
+            {(["coalesced", "raw"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setLogView(v)}
+                className={`rounded border px-1.5 py-0.5 text-[10px] transition-colors ${
+                  logView === v
+                    ? "border-black bg-black text-white"
+                    : "border-neutral-300 text-neutral-500 hover:bg-neutral-100"
+                }`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
           {events.length > 0 && (
             <button
               onClick={() => setEvents([])}
@@ -593,6 +622,43 @@ export default function Home() {
         <div className="h-40 shrink-0 overflow-auto rounded-lg border-2 border-black bg-white p-2">
           {logged.length === 0 ? (
             <span className="text-xs text-neutral-400">nothing yet</span>
+          ) : logView === "coalesced" ? (
+            <ul className="flex flex-col gap-0.5 text-xs">
+              {grouped.map((e) => (
+                <li key={e.id} className="flex items-baseline gap-2">
+                  <span className="w-14 shrink-0 tabular-nums text-neutral-400">
+                    {new Date(e.at).toLocaleTimeString([], {
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
+                  </span>
+                  <span
+                    className={`w-12 shrink-0 ${
+                      e.kind === "speech"
+                        ? "text-fuchsia-600"
+                        : e.kind === "point"
+                          ? "text-amber-600"
+                          : e.kind === "erase"
+                            ? "text-neutral-400"
+                            : "text-neutral-700"
+                    }`}
+                  >
+                    {e.kind}
+                  </span>
+                  {e.count > 1 && (
+                    <span className="shrink-0 tabular-nums text-neutral-400">
+                      ×{e.count}
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1 truncate text-black">{e.text ?? ""}</span>
+                  {e.match && (
+                    <span className="shrink-0 rounded bg-blue-100 px-1 text-blue-700">
+                      {e.match}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
           ) : (
             <ul className="flex flex-col gap-0.5 text-xs">
               {logged.map((e) => (

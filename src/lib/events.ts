@@ -29,6 +29,59 @@ export function overlap(a: Box, b: Box): number {
   return inter / area;
 }
 
+/** Adjacent events of the same kind on the same element, merged into one row. */
+export type CoalescedEvent = {
+  id: number;
+  /** When the run of events ended. */
+  at: number;
+  /** When it started — equal to `at` for a single event. */
+  from: number;
+  kind: LogEvent["kind"];
+  /** How many raw events were folded in. */
+  count: number;
+  match?: string;
+  /** Speech text is concatenated rather than counted. */
+  text?: string;
+};
+
+/**
+ * Fold runs of adjacent events that share a kind and a matched element.
+ *
+ * Drawing one circle is a dozen strokes and pointing at it is a dozen moves;
+ * as a story of what happened, both are one act. Speech is never merged — each
+ * utterance is its own thought.
+ */
+export function coalesce(events: LogEvent[]): CoalescedEvent[] {
+  const out: CoalescedEvent[] = [];
+
+  for (const e of events) {
+    const prev = out[out.length - 1];
+    const mergeable =
+      prev &&
+      e.kind !== "speech" &&
+      prev.kind === e.kind &&
+      prev.match === e.match;
+
+    if (mergeable) {
+      prev.at = e.at;
+      prev.count += 1;
+      continue;
+    }
+
+    out.push({
+      id: e.id,
+      at: e.at,
+      from: e.at,
+      kind: e.kind,
+      count: 1,
+      match: e.match,
+      text: e.text,
+    });
+  }
+
+  return out;
+}
+
 /**
  * Attach a label to each event.
  *
