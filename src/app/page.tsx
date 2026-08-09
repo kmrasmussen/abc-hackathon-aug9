@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Mermaid from "./Mermaid";
 import { coalesce, matchEvents, type LogEvent } from "@/lib/events";
 import { useStt } from "./useStt";
+import { useSpeak, type Segment } from "./useSpeak";
 
 /** A detected shape, in normalized 0–1 coordinates. */
 type Shape = { label: string; x: number; y: number; w: number; h: number };
@@ -61,6 +62,9 @@ export default function Home() {
   const [events, setEvents] = useState<LogEvent[]>([]);
   const [sttOn, setSttOn] = useState(false);
   const [logView, setLogView] = useState<"coalesced" | "raw">("coalesced");
+  const [segments, setSegments] = useState<Segment[]>([]);
+  const [responding, setResponding] = useState(false);
+  const speak = useSpeak();
 
   const eventIdRef = useRef(0);
   const strokeBoxRef = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
@@ -99,6 +103,10 @@ export default function Home() {
   ];
   const logged = matchEvents(events, labelled);
   const grouped = coalesce(logged);
+
+  // While speaking, the diagram points at whatever the current segment names.
+  const spokenLabel =
+    speak.current >= 0 ? (segments[speak.current]?.at ?? null) : null;
 
   // Which committed label the pointer is currently inside — drives the
   // "listening" highlight in the rendered mermaid.
@@ -441,6 +449,51 @@ export default function Home() {
     }
   };
 
+  /**
+   * Ask gemma to respond to the whole session, then speak it while pointing
+   * at whatever the current sentence is about.
+   */
+  const onRespond = async () => {
+    if (!committed || responding || speak.speaking) return;
+    setResponding(true);
+    setSegments([]);
+    try {
+      // Send the coalesced log — the story of what happened, not every stroke.
+      const t0 = grouped[0]?.at;
+      const logText = grouped
+        .map((g) => {
+          const dt = t0 === undefined ? 0 : (g.at - t0) / 1000;
+          const times = g.count > 1 ? ` x${g.count}` : "";
+          const text = g.text ? ` "${g.text}"` : "";
+          const match = g.match ? ` -> ${g.match}` : "";
+          return `+${dt.toFixed(1)}s ${g.kind}${times}${text}${match}`;
+        })
+        .join("\n");
+
+      const res = await fetch("/api/respond", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: committed.image,
+          mermaid: committed.mermaid,
+          log: logText,
+          labels: labelled.map((l) => l.label),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRunError(`respond error: ${data.error ?? res.status}`);
+        return;
+      }
+      setSegments(data.segments ?? []);
+      await speak.speak(data.segments ?? []);
+    } catch (err) {
+      setRunError(`respond error: ${String(err)}`);
+    } finally {
+      setResponding(false);
+    }
+  };
+
   /** Manual trigger — same path as the debounced one. */
   const onShowToLlm = () => {
     const canvas = canvasRef.current;
@@ -730,6 +783,16 @@ export default function Home() {
             {asking ? "Looking…" : "Run now"}
           </button>
           <button
+            onClick={speak.speaking ? speak.stop : onRespond}
+            disabled={!committed || responding}
+            className="rounded-md bg-violet-600 px-4 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            {responding ? "Thinking…" : speak.speaking ? "Stop" : "Respond"}
+          </button>
+          {speak.error && (
+            <span className="text-xs text-rose-600">{speak.error.slice(0, 40)}</span>
+          )}
+          <button
             onClick={onDump}
             className="rounded-md border-2 border-dashed border-neutral-400 px-3 py-1.5 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-100"
           >
@@ -865,7 +928,7 @@ export default function Home() {
             showCode ? (
               <pre className="whitespace-pre-wrap text-xs leading-relaxed text-black">{mermaid}</pre>
             ) : (
-              <Mermaid code={mermaid} highlight={pointedLabel} />
+              <Mermaid code={mermaid} highlight={spokenLabel ?? pointedLabel} />
             )
           ) : (
             <span className="text-sm text-neutral-400">

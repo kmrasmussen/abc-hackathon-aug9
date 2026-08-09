@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 const VERSION = "2026-03-01";
 
 /**
- * Mint a short-lived STT access token. Browsers can't set headers on a
+ * Mint a short-lived Cartesia access token for STT and TTS. Browsers can't set headers on a
  * WebSocket, so the client connects with ?access_token=... instead — and the
  * real API key never leaves the server.
  */
@@ -20,7 +20,7 @@ export async function POST() {
       "Cartesia-Version": VERSION,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ grants: { stt: true }, expires_in: 3600 }),
+    body: JSON.stringify({ grants: { stt: true, tts: true }, expires_in: 3600 }),
   });
 
   if (!res.ok) {
