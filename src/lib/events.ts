@@ -2,7 +2,7 @@
 export type LogEvent = {
   id: number;
   at: number;
-  kind: "stroke" | "erase" | "point" | "speech";
+  kind: "stroke" | "erase" | "point" | "speech" | "assistant";
   /** Bounding box of the ink, in 0-1 canvas coords. Absent for speech. */
   box?: { x: number; y: number; w: number; h: number };
   /** What was said, for speech events. */
@@ -59,6 +59,7 @@ export function coalesce(events: LogEvent[]): CoalescedEvent[] {
     const mergeable =
       prev &&
       e.kind !== "speech" &&
+      e.kind !== "assistant" &&
       prev.kind === e.kind &&
       prev.match === e.match;
 
@@ -109,6 +110,7 @@ export function matchEvents(
   });
 
   return withInk.map((e) => {
+    // Assistant turns already know what they pointed at.
     if (e.kind !== "speech") return e;
     let best: LogEvent | undefined;
     let bestDt = speechWindowMs;

@@ -75,22 +75,48 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "OPENROUTER_API_KEY not set" }, { status: 500 });
   }
 
-  const { image, mermaid, log, labels } = await req.json();
-  if (typeof image !== "string" || !image.startsWith("data:image/")) {
-    return NextResponse.json({ error: "expected a data: image URL" }, { status: 400 });
+  const { rounds, current } = await req.json();
+  if (!current?.image || typeof current.image !== "string") {
+    return NextResponse.json({ error: "expected a current round with an image" }, { status: 400 });
   }
 
-  const context = [
-    mermaid ? `The diagram as mermaid:\n${mermaid}` : "",
-    Array.isArray(labels) && labels.length
-      ? `Labels you may point at: ${labels.join(", ")}`
-      : "",
-    typeof log === "string" && log.trim()
-      ? `What they did and said while drawing it:\n${log}`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  type RoundIn = {
+    image: string | null;
+    mermaid: string | null;
+    labels?: string[];
+    log?: string;
+    reply?: string;
+  };
+
+  /** One user turn: the drawing as it looked, plus what they did and said. */
+  const userTurn = (r: RoundIn, withPrompt: boolean) => {
+    const parts = [
+      r.mermaid ? `The diagram as mermaid:\n${r.mermaid}` : "",
+      r.labels?.length ? `Labels you may point at: ${r.labels.join(", ")}` : "",
+      r.log?.trim() ? `What I did and said:\n${r.log}` : "(no activity this round)",
+    ].filter(Boolean);
+
+    const text = withPrompt
+      ? `${PROMPT}\n\n${parts.join("\n\n")}`
+      : parts.join("\n\n");
+
+    return {
+      role: "user",
+      content: r.image
+        ? [
+            { type: "text", text },
+            { type: "image_url", image_url: { url: r.image } },
+          ]
+        : [{ type: "text", text }],
+    };
+  };
+
+  // Each past exchange replays as a user turn (its own image and events) then
+  // the assistant's own reply — never mixed into the user's words.
+  const prior = (Array.isArray(rounds) ? (rounds as RoundIn[]) : []).flatMap((r) => [
+    userTurn(r, false),
+    { role: "assistant", content: r.reply ?? "" },
+  ]);
 
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -98,15 +124,7 @@ export async function POST(req: Request) {
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 500,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: `${PROMPT}\n\n${context}` },
-            { type: "image_url", image_url: { url: image } },
-          ],
-        },
-      ],
+      messages: [...prior, userTurn(current as RoundIn, true)],
     }),
   });
 

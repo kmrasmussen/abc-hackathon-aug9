@@ -6,6 +6,7 @@ import Orbit from "./Orbit";
 import { coalesce, matchEvents, type LogEvent } from "@/lib/events";
 import { useStt } from "./useStt";
 import { useSpeak, type Segment } from "./useSpeak";
+import { roundToText, type Round } from "@/lib/rounds";
 
 /** A detected shape, in normalized 0–1 coordinates. */
 type Shape = { label: string; x: number; y: number; w: number; h: number };
@@ -64,7 +65,14 @@ export default function Home() {
   const [sttOn, setSttOn] = useState(false);
   const [logView, setLogView] = useState<"coalesced" | "raw">("coalesced");
   const [segments, setSegments] = useState<Segment[]>([]);
+  // Completed exchanges, each holding the frame it was about.
+  const [rounds, setRounds] = useState<Round[]>([]);
+  // Events logged since the last reply belong to the round in progress.
+  const roundStartRef = useRef(0);
   const [responding, setResponding] = useState(false);
+  const [speechCountdown, setSpeechCountdown] = useState<number | null>(null);
+  const speechDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const respondRef = useRef<() => void>(() => {});
   const speak = useSpeak();
 
   const eventIdRef = useRef(0);
@@ -180,6 +188,15 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (speechCountdown === null || speechCountdown <= 0) return;
+    const t = setTimeout(
+      () => setSpeechCountdown((c) => (c === null ? null : c - 1)),
+      1000,
+    );
+    return () => clearTimeout(t);
+  }, [speechCountdown]);
+
+  useEffect(() => {
     if (countdown === null) return;
     if (countdown <= 0) return;
     const t = setTimeout(() => setCountdown((c) => (c === null ? null : c - 1)), 1000);
@@ -277,7 +294,19 @@ export default function Home() {
     setEvents((prev) => [...prev, { ...e, id: ++eventIdRef.current, at: Date.now() }]);
 
   // Cartesia decides the turn boundaries; each finished turn becomes one event.
-  const stt = useStt(sttOn, (text) => logEvent({ kind: "speech", text }));
+  const SPEECH_DEBOUNCE_MS = 5000;
+
+  const stt = useStt(sttOn, (text) => {
+    logEvent({ kind: "speech", text });
+    // Separate from the drawing debounce: stop talking for 5s and the
+    // assistant answers on its own.
+    if (speechDebounceRef.current) clearTimeout(speechDebounceRef.current);
+    setSpeechCountdown(SPEECH_DEBOUNCE_MS / 1000);
+    speechDebounceRef.current = setTimeout(() => {
+      setSpeechCountdown(null);
+      respondRef.current();
+    }, SPEECH_DEBOUNCE_MS);
+  });
 
   const DEBOUNCE_MS = 5000;
 
@@ -413,6 +442,12 @@ export default function Home() {
       L.push(`${e.from} -> ${e.to}   x=${n(e.x)} y=${n(e.y)} w=${n(e.w)} h=${n(e.h)}`);
     L.push("");
 
+    L.push(`--- rounds (${rounds.length} complete) ---`);
+    rounds.forEach((r, i) => {
+      L.push(`round ${i + 1}: ${r.events.length} user events, reply ${r.reply.length} chars`);
+    });
+    L.push("");
+
     const t0 = logged[0]?.at;
     L.push(`--- coalesced log (${grouped.length} of ${logged.length} raw) ---`);
     if (!grouped.length) L.push("(nothing yet)");
@@ -461,29 +496,48 @@ export default function Home() {
    */
   const onRespond = async () => {
     if (!committed || responding || speak.speaking) return;
+    if (speechDebounceRef.current) {
+      clearTimeout(speechDebounceRef.current);
+      speechDebounceRef.current = null;
+    }
+    setSpeechCountdown(null);
+
     setResponding(true);
     setSegments([]);
     try {
-      // Send the coalesced log — the story of what happened, not every stroke.
-      const t0 = grouped[0]?.at;
-      const logText = grouped
-        .map((g) => {
-          const dt = t0 === undefined ? 0 : (g.at - t0) / 1000;
-          const times = g.count > 1 ? ` x${g.count}` : "";
-          const text = g.text ? ` "${g.text}"` : "";
-          const match = g.match ? ` -> ${g.match}` : "";
-          return `+${dt.toFixed(1)}s ${g.kind}${times}${text}${match}`;
-        })
-        .join("\n");
+      // This round is everything logged since the last reply, paired with the
+      // frame as it looks right now.
+      const mine = grouped.filter(
+        (g) => g.kind !== "assistant" && g.at >= roundStartRef.current,
+      );
+      const labels = labelled.map((l) => l.label);
+      const current: Round = {
+        events: mine,
+        image: committed.image,
+        mermaid: committed.mermaid,
+        labels,
+        reply: "",
+      };
 
       const res = await fetch("/api/respond", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          image: committed.image,
-          mermaid: committed.mermaid,
-          log: logText,
-          labels: labelled.map((l) => l.label),
+          // Prior exchanges, each with its own image and events.
+          rounds: rounds.map((r) => ({
+            image: r.image,
+            mermaid: r.mermaid,
+            labels: r.labels,
+            log: roundToText(r),
+            reply: r.reply,
+          })),
+          // The round being answered now.
+          current: {
+            image: current.image,
+            mermaid: current.mermaid,
+            labels: current.labels,
+            log: roundToText(current),
+          },
         }),
       });
       const data = await res.json();
@@ -491,7 +545,20 @@ export default function Home() {
         setRunError(`respond error: ${data.error ?? res.status}`);
         return;
       }
+
       setSegments(data.segments ?? []);
+      const spoken = (data.segments ?? [])
+        .map((sg: Segment) => sg.text)
+        .join(" ")
+        .trim();
+
+      if (spoken) {
+        // Close the round: it keeps the frame it was about, and the log shows
+        // the reply in place.
+        setRounds((prev) => [...prev, { ...current, reply: spoken }]);
+        logEvent({ kind: "assistant", text: spoken });
+        roundStartRef.current = Date.now();
+      }
       await speak.speak(data.segments ?? []);
     } catch (err) {
       setRunError(`respond error: ${String(err)}`);
@@ -499,6 +566,8 @@ export default function Home() {
       setResponding(false);
     }
   };
+
+  respondRef.current = onRespond;
 
   /** Manual trigger — same path as the debounced one. */
   const onShowToLlm = () => {
@@ -696,7 +765,9 @@ export default function Home() {
                   </span>
                   <span
                     className={`w-12 shrink-0 ${
-                      e.kind === "speech"
+                      e.kind === "assistant"
+                        ? "text-violet-600"
+                        : e.kind === "speech"
                         ? "text-fuchsia-600"
                         : e.kind === "point"
                           ? "text-amber-600"
@@ -733,7 +804,9 @@ export default function Home() {
                   </span>
                   <span
                     className={`w-12 shrink-0 ${
-                      e.kind === "speech"
+                      e.kind === "assistant"
+                        ? "text-violet-600"
+                        : e.kind === "speech"
                         ? "text-fuchsia-600"
                         : e.kind === "point"
                           ? "text-amber-600"
@@ -798,6 +871,9 @@ export default function Home() {
           >
             {responding ? "Thinking…" : speak.speaking ? "Stop" : "Respond"}
           </button>
+          {speechCountdown !== null && (
+            <span className="text-xs text-violet-600">replying in {speechCountdown}s…</span>
+          )}
           {speak.error && (
             <span className="text-xs text-rose-600">{speak.error.slice(0, 40)}</span>
           )}
