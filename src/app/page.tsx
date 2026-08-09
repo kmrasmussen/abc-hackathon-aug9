@@ -6,6 +6,17 @@ import Mermaid from "./Mermaid";
 /** A detected shape, in normalized 0–1 coordinates. */
 type Shape = { label: string; x: number; y: number; w: number; h: number };
 
+/** A mermaid node located on the drawing. */
+type MappedNode = {
+  id: string;
+  label: string;
+  found: boolean;
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+};
+
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -18,6 +29,8 @@ export default function Home() {
   const [showCode, setShowCode] = useState(false);
   const [shapes, setShapes] = useState<Shape[] | null>(null);
   const [detecting, setDetecting] = useState(false);
+  const [nodes, setNodes] = useState<MappedNode[] | null>(null);
+  const [mapping, setMapping] = useState(false);
 
   const ctxOf = () => canvasRef.current?.getContext("2d") ?? null;
 
@@ -113,6 +126,7 @@ export default function Home() {
     setAnswer(null);
     setMermaid(null);
     setShapes(null);
+    setNodes(null);
   };
 
   const onDetect = async () => {
@@ -135,11 +149,32 @@ export default function Home() {
     }
   };
 
+  const onMap = async () => {
+    if (!capture || !mermaid) return;
+    setMapping(true);
+    setNodes(null);
+    try {
+      const res = await fetch("/api/map", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: capture, mermaid }),
+      });
+      const data = await res.json();
+      if (res.ok) setNodes(data.nodes ?? []);
+      else setAnswer(`map error: ${data.error ?? res.status}`);
+    } catch (err) {
+      setAnswer(`map error: ${String(err)}`);
+    } finally {
+      setMapping(false);
+    }
+  };
+
   const onShowToLlm = async () => {
     if (!capture) return;
     setAsking(true);
     setAnswer(null);
     setMermaid(null);
+    setNodes(null);
     try {
       const res = await fetch("/api/vision", {
         method: "POST",
@@ -211,13 +246,30 @@ export default function Home() {
           >
             {detecting ? "Detecting…" : "Detect shapes"}
           </button>
+          <button
+            onClick={onMap}
+            disabled={!capture || !mermaid || mapping}
+            className="rounded-md border-2 border-black px-3 py-1.5 text-sm font-medium text-black transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            {mapping ? "Mapping…" : "Map nodes to drawing"}
+          </button>
         </div>
 
         <h2 className={`${label} shrink-0`}>
           Captured
           {shapes && (
-            <span className="ml-2 normal-case tracking-normal text-neutral-400">
+            <span className="ml-2 normal-case tracking-normal text-rose-600">
               {shapes.length} shape{shapes.length === 1 ? "" : "s"}
+            </span>
+          )}
+          {nodes && (
+            <span className="ml-2 normal-case tracking-normal text-blue-600">
+              {nodes.filter((n) => n.found).length}/{nodes.length} nodes located
+              {nodes.some((n) => !n.found) && (
+                <span className="ml-1 text-neutral-400">
+                  (missing: {nodes.filter((n) => !n.found).map((n) => n.label).join(", ")})
+                </span>
+              )}
             </span>
           )}
         </h2>
@@ -252,6 +304,42 @@ export default function Home() {
                   {s.label}
                 </span>
               ))}
+
+              {/* mermaid nodes located on the drawing */}
+              {nodes && nodes.some((n) => n.found) && (
+                <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+                  {nodes
+                    .filter((n) => n.found)
+                    .map((n) => (
+                      <rect
+                        key={`n${n.id}`}
+                        x={(n.x ?? 0) * 100}
+                        y={(n.y ?? 0) * 100}
+                        width={(n.w ?? 0) * 100}
+                        height={(n.h ?? 0) * 100}
+                        fill="none"
+                        stroke="#2563eb"
+                        strokeWidth={2}
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    ))}
+                </svg>
+              )}
+              {nodes
+                ?.filter((n) => n.found)
+                .map((n) => (
+                  <span
+                    key={`nl${n.id}`}
+                    className="pointer-events-none absolute rounded bg-blue-600 px-1 text-[10px] font-medium leading-tight text-white"
+                    style={{
+                      left: `${(n.x ?? 0) * 100}%`,
+                      top: `${(n.y ?? 0) * 100}%`,
+                      transform: "translateY(-100%)",
+                    }}
+                  >
+                    {n.id}: {n.label}
+                  </span>
+                ))}
             </div>
           ) : (
             <div className="flex aspect-square h-full max-w-full items-center justify-center rounded-lg border-2 border-black bg-white">
