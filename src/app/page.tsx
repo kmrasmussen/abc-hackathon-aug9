@@ -390,6 +390,61 @@ export default function Home() {
                 tool === "erase" ? "cursor-none" : "cursor-crosshair"
               }`}
             />
+            {/* committed boxes, ghosted onto the live canvas */}
+            {committed && (
+              <svg
+                className="pointer-events-none absolute inset-0 h-full w-full"
+                viewBox="0 0 100 100"
+                preserveAspectRatio="none"
+              >
+                {committed.nodes.map((n) => (
+                  <rect
+                    key={`gn${n.id}`}
+                    x={(n.x ?? 0) * 100}
+                    y={(n.y ?? 0) * 100}
+                    width={(n.w ?? 0) * 100}
+                    height={(n.h ?? 0) * 100}
+                    fill="#2563eb"
+                    fillOpacity={0.04}
+                    stroke="#2563eb"
+                    strokeOpacity={0.28}
+                    strokeWidth={1}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ))}
+                {committed.edges.map((e) => (
+                  <rect
+                    key={`ge${e.from}${e.to}`}
+                    x={(e.x ?? 0) * 100}
+                    y={(e.y ?? 0) * 100}
+                    width={(e.w ?? 0) * 100}
+                    height={(e.h ?? 0) * 100}
+                    fill="#16a34a"
+                    fillOpacity={0.04}
+                    stroke="#16a34a"
+                    strokeOpacity={0.22}
+                    strokeWidth={1}
+                    strokeDasharray="3 3"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ))}
+              </svg>
+            )}
+            {/* labels sit just outside each ghost box */}
+            {committed?.nodes.map((n) => (
+              <span
+                key={`gl${n.id}`}
+                className="pointer-events-none absolute text-[10px] font-medium leading-none text-blue-600/45"
+                style={{
+                  left: `${(n.x ?? 0) * 100}%`,
+                  top: `${(n.y ?? 0) * 100}%`,
+                  transform: "translateY(-115%)",
+                }}
+              >
+                {n.label}
+              </span>
+            ))}
+
             {/* eraser ring follows the pointer so its size is visible */}
             {tool === "erase" && cursor && (
               <div
