@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Mermaid from "./Mermaid";
+import { useSam } from "./useSam";
 
 /** A detected shape, in normalized 0–1 coordinates. */
 type Shape = { label: string; x: number; y: number; w: number; h: number };
@@ -49,6 +50,11 @@ export default function Home() {
   const [rawReply, setRawReply] = useState<string | null>(null);
   const [dumpText, setDumpText] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // in-browser SAM: click a stroke to segment it, each mask gets its own colour
+  const sam = useSam();
+  const [masks, setMasks] = useState<{ url: string; color: string; label: string }[]>([]);
+  const [segBusy, setSegBusy] = useState(false);
 
   const ctxOf = () => canvasRef.current?.getContext("2d") ?? null;
 
@@ -146,6 +152,8 @@ export default function Home() {
     setShapes(null);
     setNodes(null);
     setEdges(null);
+    setMasks([]);
+    sam.reset();
   };
 
   const onDetect = async () => {
@@ -188,6 +196,66 @@ export default function Home() {
       setAnswer(`map error: ${String(err)}`);
     } finally {
       setMapping(false);
+    }
+  };
+
+  const GLOW = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#a855f7", "#ec4899", "#14b8a6"];
+
+  /** Turn a SAM mask into a coloured PNG that can be layered over the image. */
+  const maskToUrl = (
+    grid: Uint8Array,
+    w: number,
+    h: number,
+    color: string,
+  ): string => {
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext("2d");
+    if (!ctx) return "";
+    const img = ctx.createImageData(w, h);
+    const r = parseInt(color.slice(1, 3), 16);
+    const g = parseInt(color.slice(3, 5), 16);
+    const b = parseInt(color.slice(5, 7), 16);
+    for (let i = 0; i < w * h; i++) {
+      if (!grid[i]) continue;
+      img.data[i * 4] = r;
+      img.data[i * 4 + 1] = g;
+      img.data[i * 4 + 2] = b;
+      img.data[i * 4 + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    return c.toDataURL();
+  };
+
+  /**
+   * Moondream bridge: each mermaid node already has a box from /api/map, so
+   * prompt SAM with that box to get the node's exact pixels.
+   */
+  const onSam = async () => {
+    if (!capture || segBusy) return;
+    const located = (nodes ?? []).filter((n) => n.found);
+    if (!located.length) return;
+
+    setSegBusy(true);
+    setMasks([]);
+    try {
+      if (sam.status !== "ready") {
+        const ok = await sam.encode(capture);
+        if (!ok) return;
+      }
+      const out: { url: string; color: string; label: string }[] = [];
+      for (let i = 0; i < located.length; i++) {
+        const n = located[i];
+        const m = await sam.segmentBox(n.x ?? 0, n.y ?? 0, n.w ?? 0, n.h ?? 0);
+        if (!m) continue;
+        const color = GLOW[i % GLOW.length];
+        const url = maskToUrl(m.grid, m.width, m.height, color);
+        if (url) out.push({ url, color, label: n.label });
+        setMasks([...out]);
+      }
+    } finally {
+      setSegBusy(false);
     }
   };
 
@@ -360,6 +428,34 @@ export default function Home() {
             segment
           </label>
           <button
+            onClick={onSam}
+            disabled={!capture || segBusy || !(nodes ?? []).some((n) => n.found)}
+            className="rounded-md border-2 border-fuchsia-600 px-3 py-1.5 text-sm font-medium text-fuchsia-700 transition-colors hover:bg-fuchsia-50 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            {segBusy
+              ? sam.status === "loading"
+                ? "Loading SAM…"
+                : sam.status === "encoding"
+                  ? "Encoding…"
+                  : "Segmenting…"
+              : "SAM masks"}
+          </button>
+          {masks.length > 0 && (
+            <span className="text-xs text-neutral-500">
+              {masks.map((m) => (
+                <span key={m.label} className="mr-1.5" style={{ color: m.color }}>
+                  ●{m.label}
+                </span>
+              ))}
+              <button onClick={() => setMasks([])} className="ml-2 underline hover:text-black">
+                clear
+              </button>
+            </span>
+          )}
+          {sam.error && (
+            <span className="text-xs text-rose-600">{sam.error.slice(0, 60)}</span>
+          )}
+          <button
             onClick={onDump}
             className="rounded-md border-2 border-dashed border-neutral-400 px-3 py-1.5 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-100"
           >
@@ -415,6 +511,16 @@ export default function Home() {
             <div className="relative aspect-square h-full max-w-full overflow-hidden rounded-lg border-2 border-black bg-white">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={capture} alt="captured drawing" className="block h-full w-full object-contain" />
+              {/* SAM masks, drawn over the capture */}
+              {masks.map((m, i) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={`m${i}`}
+                  src={m.url}
+                  alt=""
+                  className="pointer-events-none absolute inset-0 h-full w-full object-contain opacity-60"
+                />
+              ))}
               {shapes && shapes.length > 0 && (
                 <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
                   {shapes.map((s, i) => (
