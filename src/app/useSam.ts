@@ -133,8 +133,19 @@ export function useSam() {
           [1, 1, 4],
         );
 
+        // SamModel.forward reads input_points.dims unconditionally, so a box on
+        // its own throws. Anchor with the box centre as a foreground point.
+        const input_points = new t.Tensor(
+          "float32",
+          [(x + w / 2) * rw, (y + h / 2) * rh],
+          [1, 1, 1, 2],
+        );
+        const input_labels = new t.Tensor("int64", [1n], [1, 1, 1]);
+
         const outputs = await modelRef.current({
           ...embeddingsRef.current,
+          input_points,
+          input_labels,
           input_boxes,
         });
 
