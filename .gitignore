@@ -40,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# SlimSAM ONNX weights (13MB) — fetched by scripts/get-sam-models.sh
+/public/models/
