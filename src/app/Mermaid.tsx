@@ -59,7 +59,9 @@ export default function Mermaid({
     const host = hostRef.current;
     if (!host) return;
 
-    host.querySelectorAll(".is-listening").forEach((el) => el.classList.remove("is-listening"));
+    host
+      .querySelectorAll(".is-listening, .is-listening-marker")
+      .forEach((el) => el.classList.remove("is-listening", "is-listening-marker"));
     if (!highlight) return;
 
     // Edge labels arrive as "From -> To"; light up both ends.
@@ -72,10 +74,17 @@ export default function Mermaid({
       if (text && wanted.includes(text)) node.classList.add("is-listening");
     }
 
-    // For an edge, also light the path between the two nodes.
+    // For an edge, light the link path and the arrowhead it points to.
     if (highlight.includes("->")) {
       for (const path of Array.from(host.querySelectorAll("path.flowchart-link"))) {
         path.classList.add("is-listening");
+        // The head is a separate <marker> referenced by url(#id) — colour it too.
+        const ref = path.getAttribute("marker-end") ?? "";
+        const markerId = ref.match(/url\(#(.+?)\)/)?.[1];
+        if (markerId) {
+          const marker = host.querySelector(`#${CSS.escape(markerId)}`);
+          marker?.classList.add("is-listening-marker");
+        }
       }
     }
   }, [highlight, ready]);
@@ -83,26 +92,41 @@ export default function Mermaid({
   return (
     <div className="flex h-full w-full flex-col">
       <style>{`
+        /* Colour only — no transforms. Scaling an SVG group re-anchors its
+           coordinate system and shifts the whole diagram out of place. */
+        .mermaid-host g.node rect,
+        .mermaid-host g.node circle,
+        .mermaid-host g.node polygon,
+        .mermaid-host g.node ellipse,
+        .mermaid-host path.flowchart-link {
+          transition: fill 180ms ease, stroke 180ms ease;
+        }
         .mermaid-host g.node.is-listening rect,
         .mermaid-host g.node.is-listening circle,
         .mermaid-host g.node.is-listening polygon,
         .mermaid-host g.node.is-listening ellipse {
-          fill: #ede9fe !important;
+          fill: #ddd6fe !important;
+          stroke: #7c3aed !important;
+        }
+        .mermaid-host g.node.is-listening text,
+        .mermaid-host g.node.is-listening tspan {
+          fill: #5b21b6 !important;
+          font-weight: 700 !important;
+        }
+        /* Mermaid styles links via its own classes, so match them explicitly.
+           Arrowheads are separate marker paths and need colouring too. */
+        .mermaid-host svg path.flowchart-link.is-listening,
+        .mermaid-host svg .edgePaths path.is-listening,
+        .mermaid-host svg path.is-listening {
           stroke: #7c3aed !important;
           stroke-width: 3px !important;
+          opacity: 1 !important;
         }
-        .mermaid-host g.node.is-listening {
-          transform-box: fill-box;
-          transform-origin: center;
-          animation: listening 1.2s ease-in-out infinite;
-        }
-        .mermaid-host path.flowchart-link.is-listening {
+        .mermaid-host svg marker.is-listening path,
+        .mermaid-host svg marker.is-listening,
+        .mermaid-host svg .is-listening-marker path {
+          fill: #7c3aed !important;
           stroke: #7c3aed !important;
-          stroke-width: 3px !important;
-        }
-        @keyframes listening {
-          0%, 100% { transform: scale(1); }
-          50%      { transform: scale(1.06); }
         }
       `}</style>
       <div ref={hostRef} className="mermaid-host flex-1 [&>svg]:h-full [&>svg]:w-full" />
