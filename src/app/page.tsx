@@ -17,6 +17,17 @@ type MappedNode = {
   h?: number;
 };
 
+/** A mermaid edge located on the drawing (the arrowhead at its target). */
+type MappedEdge = {
+  from: string;
+  to: string;
+  found: boolean;
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+};
+
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -30,6 +41,7 @@ export default function Home() {
   const [shapes, setShapes] = useState<Shape[] | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [nodes, setNodes] = useState<MappedNode[] | null>(null);
+  const [edges, setEdges] = useState<MappedEdge[] | null>(null);
   const [mapping, setMapping] = useState(false);
   const [rawReply, setRawReply] = useState<string | null>(null);
   const [dumpText, setDumpText] = useState<string | null>(null);
@@ -130,6 +142,7 @@ export default function Home() {
     setMermaid(null);
     setShapes(null);
     setNodes(null);
+    setEdges(null);
   };
 
   const onDetect = async () => {
@@ -156,6 +169,7 @@ export default function Home() {
     if (!capture || !mermaid) return;
     setMapping(true);
     setNodes(null);
+    setEdges(null);
     try {
       const res = await fetch("/api/map", {
         method: "POST",
@@ -163,8 +177,10 @@ export default function Home() {
         body: JSON.stringify({ image: capture, mermaid }),
       });
       const data = await res.json();
-      if (res.ok) setNodes(data.nodes ?? []);
-      else setAnswer(`map error: ${data.error ?? res.status}`);
+      if (res.ok) {
+        setNodes(data.nodes ?? []);
+        setEdges(data.edges ?? []);
+      } else setAnswer(`map error: ${data.error ?? res.status}`);
     } catch (err) {
       setAnswer(`map error: ${String(err)}`);
     } finally {
@@ -209,6 +225,18 @@ export default function Home() {
     }
     L.push("");
 
+    L.push("--- edges (arrowhead at target) ---");
+    if (!edges) L.push("(not mapped yet)");
+    else if (!edges.length) L.push("(no edges parsed)");
+    else
+      for (const e of edges)
+        L.push(
+          e.found
+            ? `${e.from} -> ${e.to}   x=${n(e.x)} y=${n(e.y)} w=${n(e.w)} h=${n(e.h)}`
+            : `${e.from} -> ${e.to}   NOT LOCATED`,
+        );
+    L.push("");
+
     L.push("--- generic shape detection ---");
     if (!shapes) L.push("(not run)");
     else if (!shapes.length) L.push("(none found)");
@@ -237,6 +265,7 @@ export default function Home() {
     setAnswer(null);
     setMermaid(null);
     setNodes(null);
+    setEdges(null);
     try {
       const res = await fetch("/api/vision", {
         method: "POST",
@@ -355,12 +384,17 @@ export default function Home() {
           )}
           {nodes && (
             <span className="ml-2 normal-case tracking-normal text-blue-600">
-              {nodes.filter((n) => n.found).length}/{nodes.length} nodes located
+              {nodes.filter((n) => n.found).length}/{nodes.length} nodes
               {nodes.some((n) => !n.found) && (
                 <span className="ml-1 text-neutral-400">
                   (missing: {nodes.filter((n) => !n.found).map((n) => n.label).join(", ")})
                 </span>
               )}
+            </span>
+          )}
+          {edges && (
+            <span className="ml-2 normal-case tracking-normal text-green-600">
+              {edges.filter((e) => e.found).length}/{edges.length} edges
             </span>
           )}
         </h2>
@@ -429,6 +463,41 @@ export default function Home() {
                     }}
                   >
                     {n.id}: {n.label}
+                  </span>
+                ))}
+
+              {/* edges: the arrowhead that marks each edge's target */}
+              {edges && edges.some((e) => e.found) && (
+                <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+                  {edges
+                    .filter((e) => e.found)
+                    .map((e) => (
+                      <rect
+                        key={`e${e.from}${e.to}`}
+                        x={(e.x ?? 0) * 100}
+                        y={(e.y ?? 0) * 100}
+                        width={(e.w ?? 0) * 100}
+                        height={(e.h ?? 0) * 100}
+                        fill="none"
+                        stroke="#16a34a"
+                        strokeWidth={2}
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    ))}
+                </svg>
+              )}
+              {edges
+                ?.filter((e) => e.found)
+                .map((e) => (
+                  <span
+                    key={`el${e.from}${e.to}`}
+                    className="pointer-events-none absolute rounded bg-green-600 px-1 text-[9px] font-medium leading-tight text-white"
+                    style={{
+                      left: `${(e.x ?? 0) * 100}%`,
+                      top: `${((e.y ?? 0) + (e.h ?? 0)) * 100}%`,
+                    }}
+                  >
+                    {e.from}→{e.to}
                   </span>
                 ))}
             </div>
