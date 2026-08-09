@@ -49,7 +49,7 @@ export default function Home() {
   const [nodes, setNodes] = useState<MappedNode[] | null>(null);
   const [edges, setEdges] = useState<MappedEdge[] | null>(null);
   const [mapping, setMapping] = useState(false);
-  const [mapMode, setMapMode] = useState<"detect" | "point" | "segment">("detect");
+  const [mapMode, setMapMode] = useState<"detect" | "point" | "segment" | "gemma">("detect");
   const [rawReply, setRawReply] = useState<string | null>(null);
   const [dumpText, setDumpText] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -426,12 +426,13 @@ export default function Home() {
           </button>
           <select
             value={mapMode}
-            onChange={(e) => setMapMode(e.target.value as "detect" | "point" | "segment")}
+            onChange={(e) => setMapMode(e.target.value as "detect" | "point" | "segment" | "gemma")}
             className="rounded-md border-2 border-black px-2 py-1.5 text-sm text-black"
           >
             <option value="detect">detect (box)</option>
             <option value="point">point</option>
             <option value="segment">segment</option>
+            <option value="gemma">gemma boxes</option>
           </select>
           <button
             onClick={onSam}

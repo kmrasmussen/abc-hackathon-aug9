@@ -3,6 +3,7 @@ import { parseMermaidNodes } from "@/lib/mermaid-nodes";
 import { parseMermaidEdges } from "@/lib/mermaid-edges";
 
 const MODEL = "moondream3.1-9B-A2B";
+const GEMMA = "google/gemma-4-31b-it";
 
 type Box = { x_min: number; y_min: number; x_max: number; y_max: number };
 type Rect = { x: number; y: number; w: number; h: number };
@@ -16,6 +17,60 @@ async function detect(key: string, image: string, object: string): Promise<Box[]
   if (!res.ok) return [];
   const data = await res.json();
   return (data?.objects ?? []) as Box[];
+}
+
+/**
+ * Gemma 3+ can detect directly: it returns box_2d as [ymin, xmin, ymax, xmax]
+ * on a 1000x1000 grid. One call covers every label, unlike Moondream's
+ * one-request-per-object.
+ */
+async function gemmaDetect(
+  key: string,
+  image: string,
+  labels: string[],
+): Promise<Map<string, Rect>> {
+  const out = new Map<string, Rect>();
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: GEMMA,
+      max_tokens: 600,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Detect these elements in the diagram: ${labels.join(", ")}. Return only JSON.`,
+            },
+            { type: "image_url", image_url: { url: image } },
+          ],
+        },
+      ],
+    }),
+  });
+  if (!res.ok) return out;
+  const data = await res.json();
+  const text: string = data?.choices?.[0]?.message?.content ?? "";
+  const json = text.match(/\[[\s\S]*\]/);
+  if (!json) return out;
+  try {
+    const items = JSON.parse(json[0]) as { box_2d: number[]; label: string }[];
+    for (const it of items) {
+      if (!Array.isArray(it.box_2d) || it.box_2d.length !== 4) continue;
+      const [ymin, xmin, ymax, xmax] = it.box_2d;
+      out.set(String(it.label).toLowerCase(), {
+        x: xmin / 1000,
+        y: ymin / 1000,
+        w: (xmax - xmin) / 1000,
+        h: (ymax - ymin) / 1000,
+      });
+    }
+  } catch {
+    // malformed json — fall through with whatever parsed
+  }
+  return out;
 }
 
 /** /point returns centre points (0–1 coords) rather than boxes. */
@@ -68,6 +123,7 @@ export async function POST(req: Request) {
   const { image, mermaid, mode } = await req.json();
   const useSegment = mode === "segment";
   const usePoint = mode === "point";
+  const useGemma = mode === "gemma";
   if (typeof image !== "string" || !image.startsWith("data:image/")) {
     return NextResponse.json({ error: "expected a data: image URL" }, { status: 400 });
   }
@@ -77,6 +133,29 @@ export async function POST(req: Request) {
 
   const parsedNodes = parseMermaidNodes(mermaid);
   const parsedEdges = parseMermaidEdges(mermaid);
+
+  // Gemma detects every label in a single call, so handle it up front.
+  if (useGemma) {
+    const orKey = process.env.OPENROUTER_API_KEY;
+    if (!orKey) {
+      return NextResponse.json({ error: "OPENROUTER_API_KEY not set" }, { status: 500 });
+    }
+    const found = await gemmaDetect(orKey, image, parsedNodes.map((n) => n.label));
+    const nodes = parsedNodes.map((n) => {
+      const r = found.get(n.label.toLowerCase());
+      return {
+        id: n.id,
+        label: n.label,
+        found: Boolean(r),
+        ...(r ? { x: r.x, y: r.y, w: r.w, h: r.h } : {}),
+      };
+    });
+    return NextResponse.json({
+      nodes,
+      edges: parsedEdges.map((e) => ({ from: e.from, to: e.to, found: false })),
+      arrowsDetected: 0,
+    });
+  }
 
   // Locate each node by its label, and all arrowheads in one extra call.
   const [nodeResults, arrowBoxes] = await Promise.all([
