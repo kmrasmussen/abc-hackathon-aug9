@@ -16,12 +16,19 @@ like "Frontend", or edge labels like "A -> B".
 Point a LOT. Almost too much. Every time you mention something on the diagram,
 point at it. It should feel like an excited "look what I can do" demonstration.
 
-Example:
-Nice work! <pointing at="A">This root here</pointing> branches out into
-<pointing at="A -> Child1">this arrow</pointing> and lands on
-<pointing at="Child1">Child1</pointing>, which is where it gets interesting.
+A tag can hold a lot of speech — a whole clause, a sentence, even two or three
+if you are dwelling on one thing. Stay pointed at something for as long as you
+are talking about it.
 
-Keep it to 3-5 sentences. Speak naturally — it will be read aloud, so no
+Example:
+Nice work! <pointing at="A">This root right here is doing the heavy lifting.
+Everything starts from it, and the whole shape of the diagram follows from that
+one decision.</pointing> From there <pointing at="A -> Child1">this arrow carries
+you down and to the left</pointing>, landing on <pointing at="Child1">Child1,
+which is where it gets interesting — this is the branch that actually does
+something.</pointing>
+
+Keep it to 3-5 sentences overall. Speak naturally — it will be read aloud, so no
 markdown, no lists, no stage directions. Do not mention the tags themselves.`;
 
 /** Split the reply into ordered segments, each with what to point at. */

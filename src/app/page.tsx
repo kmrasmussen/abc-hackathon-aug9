@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Mermaid from "./Mermaid";
+import Orbit from "./Orbit";
 import { coalesce, matchEvents, type LogEvent } from "@/lib/events";
 import { useStt } from "./useStt";
 import { useSpeak, type Segment } from "./useSpeak";
@@ -107,6 +108,11 @@ export default function Home() {
   // While speaking, the diagram points at whatever the current segment names.
   const spokenLabel =
     speak.current >= 0 ? (segments[speak.current]?.at ?? null) : null;
+
+  // The box behind whatever is being spoken about, for the orbiting marker.
+  const spokenBox = spokenLabel
+    ? (labelled.find((l) => l.label === spokenLabel)?.box ?? null)
+    : null;
 
   // Which committed label the pointer is currently inside — drives the
   // "listening" highlight in the rendered mermaid.
@@ -606,6 +612,9 @@ export default function Home() {
                 {n.label}
               </span>
             ))}
+
+            {/* red dot circling whatever is being spoken about */}
+            <Orbit box={spokenBox} />
 
             {/* eraser ring follows the pointer so its size is visible */}
             {tool === "erase" && cursor && (
