@@ -64,28 +64,49 @@ export default function Mermaid({
       .forEach((el) => el.classList.remove("is-listening", "is-listening-marker"));
     if (!highlight) return;
 
-    // Edge labels arrive as "From -> To"; light up both ends.
-    const wanted = highlight.includes("->")
-      ? highlight.split("->").map((t) => t.trim().toLowerCase())
-      : [highlight.trim().toLowerCase()];
+    const markLink = (path: Element) => {
+      path.classList.add("is-listening");
+      // The head is a separate <marker> referenced by url(#id) — colour it too.
+      const ref = path.getAttribute("marker-end") ?? "";
+      const markerId = ref.match(/url\(#(.+?)\)/)?.[1];
+      if (markerId) host.querySelector(`#${CSS.escape(markerId)}`)?.classList.add("is-listening-marker");
+    };
 
-    for (const node of Array.from(host.querySelectorAll("g.node"))) {
-      const text = (node.textContent ?? "").trim().toLowerCase();
-      if (text && wanted.includes(text)) node.classList.add("is-listening");
-    }
-
-    // For an edge, light the link path and the arrowhead it points to.
     if (highlight.includes("->")) {
+      // Only the one link, not its endpoints and not every other edge. Mermaid
+      // ids links as "<prefix>L_<from>_<to>_<n>" using the node ids, so find
+      // the ids whose labels match the two ends of this edge.
+      const [fromLabel, toLabel] = highlight.split("->").map((t) => t.trim().toLowerCase());
+      const idOf = (label: string) => {
+        for (const node of Array.from(host.querySelectorAll("g.node"))) {
+          if ((node.textContent ?? "").trim().toLowerCase() === label) {
+            // Node ids look like "mr0-flowchart-A-0"; the mermaid id is the
+            // part after "flowchart-", before the trailing index.
+            return node.id.match(/flowchart-(.+)-\d+$/)?.[1] ?? null;
+          }
+        }
+        return null;
+      };
+      const a = idOf(fromLabel);
+      const b = idOf(toLabel);
+
       for (const path of Array.from(host.querySelectorAll("path.flowchart-link"))) {
-        path.classList.add("is-listening");
-        // The head is a separate <marker> referenced by url(#id) — colour it too.
-        const ref = path.getAttribute("marker-end") ?? "";
-        const markerId = ref.match(/url\(#(.+?)\)/)?.[1];
-        if (markerId) {
-          const marker = host.querySelector(`#${CSS.escape(markerId)}`);
-          marker?.classList.add("is-listening-marker");
+        const m = path.id.match(/L_(.+?)_(.+?)_\d+$/);
+        if (a && b && m) {
+          if (m[1] === a && m[2] === b) markLink(path);
+        } else if (!a || !b) {
+          // Couldn't resolve ids — better to light nothing than the wrong edge.
+          continue;
         }
       }
+      return;
+    }
+
+    // A plain node label lights just that node.
+    const wanted = highlight.trim().toLowerCase();
+    for (const node of Array.from(host.querySelectorAll("g.node"))) {
+      const text = (node.textContent ?? "").trim().toLowerCase();
+      if (text && text === wanted) node.classList.add("is-listening");
     }
   }, [highlight, ready]);
 
