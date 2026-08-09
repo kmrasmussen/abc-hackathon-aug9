@@ -18,6 +18,27 @@ async function detect(key: string, image: string, object: string): Promise<Box[]
   return (data?.objects ?? []) as Box[];
 }
 
+/**
+ * /segment returns a single SVG path (0–1 coords) plus its bbox — an outline
+ * of the thing rather than a rectangle. One object per call, and noticeably
+ * slower than /detect.
+ */
+async function segment(
+  key: string,
+  image: string,
+  object: string,
+): Promise<{ path: string; bbox: Box } | null> {
+  const res = await fetch("https://api.moondream.ai/v1/segment", {
+    method: "POST",
+    headers: { "X-Moondream-Auth": key, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: MODEL, image_url: image, object }),
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (!data?.path || !data?.bbox || data?.parse_error) return null;
+  return { path: data.path as string, bbox: data.bbox as Box };
+}
+
 const centre = (r: Rect) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }) =>
   Math.hypot(a.x - b.x, a.y - b.y);
@@ -28,7 +49,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "MOONDREAM_API_KEY not set" }, { status: 500 });
   }
 
-  const { image, mermaid } = await req.json();
+  const { image, mermaid, mode } = await req.json();
+  const useSegment = mode === "segment";
   if (typeof image !== "string" || !image.startsWith("data:image/")) {
     return NextResponse.json({ error: "expected a data: image URL" }, { status: 400 });
   }
@@ -43,6 +65,26 @@ export async function POST(req: Request) {
   const [nodeResults, arrowBoxes] = await Promise.all([
     Promise.all(
       parsedNodes.map(async (n) => {
+        if (useSegment) {
+          const seg = await segment(key, image, n.label);
+          const b = seg?.bbox;
+          const big = b && (b.x_max - b.x_min) * (b.y_max - b.y_min) >= 0.6;
+          return {
+            id: n.id,
+            label: n.label,
+            found: Boolean(b) && !big,
+            ...(b && !big
+              ? {
+                  x: b.x_min,
+                  y: b.y_min,
+                  w: b.x_max - b.x_min,
+                  h: b.y_max - b.y_min,
+                  path: seg?.path,
+                }
+              : {}),
+          };
+        }
+
         const boxes = await detect(key, image, n.label);
         // A box covering most of the canvas means "I didn't find it".
         const usable = boxes.filter(

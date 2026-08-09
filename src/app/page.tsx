@@ -15,6 +15,8 @@ type MappedNode = {
   y?: number;
   w?: number;
   h?: number;
+  /** SVG outline in 0-1 coords, present in segment mode. */
+  path?: string;
 };
 
 /** A mermaid edge located on the drawing (the arrowhead at its target). */
@@ -43,6 +45,7 @@ export default function Home() {
   const [nodes, setNodes] = useState<MappedNode[] | null>(null);
   const [edges, setEdges] = useState<MappedEdge[] | null>(null);
   const [mapping, setMapping] = useState(false);
+  const [segmentMode, setSegmentMode] = useState(false);
   const [rawReply, setRawReply] = useState<string | null>(null);
   const [dumpText, setDumpText] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -174,7 +177,7 @@ export default function Home() {
       const res = await fetch("/api/map", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: capture, mermaid }),
+        body: JSON.stringify({ image: capture, mermaid, mode: segmentMode ? "segment" : "detect" }),
       });
       const data = await res.json();
       if (res.ok) {
@@ -194,7 +197,7 @@ export default function Home() {
     const n = (v: number | undefined) => (v === undefined ? "?" : v.toFixed(3));
 
     L.push("=== PROMPT DUMP ===");
-    L.push(`captured: ${capture ? "yes" : "no"}`);
+    L.push(`captured: ${capture ? "yes" : "no"} | map mode: ${segmentMode ? "segment" : "detect"}`);
     L.push("");
 
     L.push("--- gemma description ---");
@@ -218,7 +221,7 @@ export default function Home() {
       for (const nd of nodes) {
         L.push(
           nd.found
-            ? `${nd.id}[${nd.label}]  x=${n(nd.x)} y=${n(nd.y)} w=${n(nd.w)} h=${n(nd.h)}`
+            ? `${nd.id}[${nd.label}]  x=${n(nd.x)} y=${n(nd.y)} w=${n(nd.w)} h=${n(nd.h)}${nd.path ? ` path=${nd.path.length}chars` : ""}`
             : `${nd.id}[${nd.label}]  NOT FOUND`,
         );
       }
@@ -347,6 +350,15 @@ export default function Home() {
           >
             {mapping ? "Mapping…" : "Map nodes to drawing"}
           </button>
+          <label className="flex cursor-pointer items-center gap-1.5 text-sm text-neutral-700">
+            <input
+              type="checkbox"
+              checked={segmentMode}
+              onChange={(e) => setSegmentMode(e.target.checked)}
+              className="h-4 w-4 accent-blue-600"
+            />
+            segment
+          </label>
           <button
             onClick={onDump}
             className="rounded-md border-2 border-dashed border-neutral-400 px-3 py-1.5 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-100"
@@ -432,23 +444,49 @@ export default function Home() {
 
               {/* mermaid nodes located on the drawing */}
               {nodes && nodes.some((n) => n.found) && (
-                <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
-                  {nodes
-                    .filter((n) => n.found)
-                    .map((n) => (
-                      <rect
-                        key={`n${n.id}`}
-                        x={(n.x ?? 0) * 100}
-                        y={(n.y ?? 0) * 100}
-                        width={(n.w ?? 0) * 100}
-                        height={(n.h ?? 0) * 100}
-                        fill="none"
-                        stroke="#2563eb"
-                        strokeWidth={2}
-                        vectorEffect="non-scaling-stroke"
-                      />
-                    ))}
-                </svg>
+                <>
+                  {/* outlines come back in 0-1 coords, so they need their own viewBox */}
+                  <svg
+                    className="pointer-events-none absolute inset-0 h-full w-full"
+                    viewBox="0 0 1 1"
+                    preserveAspectRatio="none"
+                  >
+                    {nodes
+                      .filter((n) => n.found && n.path)
+                      .map((n) => (
+                        <path
+                          key={`p${n.id}`}
+                          d={n.path}
+                          fill="#2563eb"
+                          fillOpacity={0.15}
+                          stroke="#2563eb"
+                          strokeWidth={2}
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      ))}
+                  </svg>
+                  <svg
+                    className="pointer-events-none absolute inset-0 h-full w-full"
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                  >
+                    {nodes
+                      .filter((n) => n.found && !n.path)
+                      .map((n) => (
+                        <rect
+                          key={`n${n.id}`}
+                          x={(n.x ?? 0) * 100}
+                          y={(n.y ?? 0) * 100}
+                          width={(n.w ?? 0) * 100}
+                          height={(n.h ?? 0) * 100}
+                          fill="none"
+                          stroke="#2563eb"
+                          strokeWidth={2}
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      ))}
+                  </svg>
+                </>
               )}
               {nodes
                 ?.filter((n) => n.found)
