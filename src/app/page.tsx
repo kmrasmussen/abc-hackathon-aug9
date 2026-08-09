@@ -31,6 +31,9 @@ export default function Home() {
   const [detecting, setDetecting] = useState(false);
   const [nodes, setNodes] = useState<MappedNode[] | null>(null);
   const [mapping, setMapping] = useState(false);
+  const [rawReply, setRawReply] = useState<string | null>(null);
+  const [dumpText, setDumpText] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const ctxOf = () => canvasRef.current?.getContext("2d") ?? null;
 
@@ -169,6 +172,65 @@ export default function Home() {
     }
   };
 
+  /** Everything the pipeline produced, as plain text to paste into a chat. */
+  const dump = () => {
+    const L: string[] = [];
+    const n = (v: number | undefined) => (v === undefined ? "?" : v.toFixed(3));
+
+    L.push("=== PROMPT DUMP ===");
+    L.push(`captured: ${capture ? "yes" : "no"}`);
+    L.push("");
+
+    L.push("--- gemma description ---");
+    L.push(answer ?? "(none)");
+    L.push("");
+
+    L.push("--- gemma raw reply ---");
+    L.push(rawReply ?? "(none)");
+    L.push("");
+
+    L.push("--- mermaid ---");
+    L.push(mermaid ?? "(none)");
+    L.push("");
+
+    L.push("--- parsed nodes -> located on drawing ---");
+    if (!nodes) {
+      L.push("(not mapped yet)");
+    } else if (!nodes.length) {
+      L.push("(no labelled nodes parsed from the mermaid)");
+    } else {
+      for (const nd of nodes) {
+        L.push(
+          nd.found
+            ? `${nd.id}[${nd.label}]  x=${n(nd.x)} y=${n(nd.y)} w=${n(nd.w)} h=${n(nd.h)}`
+            : `${nd.id}[${nd.label}]  NOT FOUND`,
+        );
+      }
+    }
+    L.push("");
+
+    L.push("--- generic shape detection ---");
+    if (!shapes) L.push("(not run)");
+    else if (!shapes.length) L.push("(none found)");
+    else
+      for (const s of shapes)
+        L.push(`${s.label}  x=${n(s.x)} y=${n(s.y)} w=${n(s.w)} h=${n(s.h)}`);
+
+    return L.join("\n");
+  };
+
+  const onDump = async () => {
+    const text = dump();
+    setDumpText(text);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard blocked — the textarea below is the fallback
+    }
+  };
+
   const onShowToLlm = async () => {
     if (!capture) return;
     setAsking(true);
@@ -183,7 +245,10 @@ export default function Home() {
       });
       const data = await res.json();
       setAnswer(res.ok ? data.text : `error: ${data.error ?? res.status}`);
-      if (res.ok) setMermaid(data.mermaid ?? null);
+      if (res.ok) {
+        setMermaid(data.mermaid ?? null);
+        setRawReply(data.raw ?? null);
+      }
     } catch (err) {
       setAnswer(`error: ${String(err)}`);
     } finally {
@@ -253,7 +318,33 @@ export default function Home() {
           >
             {mapping ? "Mapping…" : "Map nodes to drawing"}
           </button>
+          <button
+            onClick={onDump}
+            className="rounded-md border-2 border-dashed border-neutral-400 px-3 py-1.5 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-100"
+          >
+            {copied ? "Copied ✓" : "Prompt dump"}
+          </button>
         </div>
+
+        {dumpText !== null && (
+          <div className="shrink-0">
+            <div className="mb-1 flex items-center gap-2">
+              <span className={label}>Prompt dump</span>
+              <button
+                onClick={() => setDumpText(null)}
+                className="text-[10px] text-neutral-500 underline hover:text-black"
+              >
+                hide
+              </button>
+            </div>
+            <textarea
+              readOnly
+              value={dumpText}
+              onFocus={(e) => e.currentTarget.select()}
+              className="h-40 w-full resize-y rounded-lg border-2 border-dashed border-neutral-400 bg-neutral-50 p-2 font-mono text-[11px] leading-snug text-black"
+            />
+          </div>
+        )}
 
         <h2 className={`${label} shrink-0`}>
           Captured
