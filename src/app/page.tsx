@@ -50,6 +50,9 @@ export default function Home() {
   const [edges, setEdges] = useState<MappedEdge[] | null>(null);
   const [mapping, setMapping] = useState(false);
   const [mapMode, setMapMode] = useState<"detect" | "point" | "segment" | "gemma">("detect");
+  const [visionBoxes, setVisionBoxes] = useState<
+    { label: string; x: number; y: number; w: number; h: number }[]
+  >([]);
   const [rawReply, setRawReply] = useState<string | null>(null);
   const [dumpText, setDumpText] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -156,6 +159,7 @@ export default function Home() {
     setNodes(null);
     setEdges(null);
     setMasks([]);
+    setVisionBoxes([]);
     sam.reset();
   };
 
@@ -286,6 +290,11 @@ export default function Home() {
     L.push(mermaid ?? "(none)");
     L.push("");
 
+    L.push(`--- gemma boxes (same call as mermaid): ${visionBoxes.length} ---`);
+    for (const b of visionBoxes)
+      L.push(`${b.label}  x=${n(b.x)} y=${n(b.y)} w=${n(b.w)} h=${n(b.h)}`);
+    L.push("");
+
     L.push("--- parsed nodes -> located on drawing ---");
     if (!nodes) {
       L.push("(not mapped yet)");
@@ -343,6 +352,7 @@ export default function Home() {
     setMermaid(null);
     setNodes(null);
     setEdges(null);
+    setVisionBoxes([]);
     try {
       const res = await fetch("/api/vision", {
         method: "POST",
@@ -354,6 +364,22 @@ export default function Home() {
       if (res.ok) {
         setMermaid(data.mermaid ?? null);
         setRawReply(data.raw ?? null);
+        const vb = data.boxes ?? [];
+        setVisionBoxes(vb);
+        // Gemma located the nodes in the same call, so map is already done.
+        if (vb.length) {
+          setNodes(
+            vb.map((b: { label: string; x: number; y: number; w: number; h: number }, i: number) => ({
+              id: String.fromCharCode(65 + i),
+              label: b.label,
+              found: true,
+              x: b.x,
+              y: b.y,
+              w: b.w,
+              h: b.h,
+            })),
+          );
+        }
       }
     } catch (err) {
       setAnswer(`error: ${String(err)}`);

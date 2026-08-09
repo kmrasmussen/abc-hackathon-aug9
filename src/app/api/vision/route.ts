@@ -18,7 +18,41 @@ Rules for the Mermaid code:
 - One node per shape you can see; use the text written inside the shape as its label.
 - Use --> for arrows, following the direction drawn.
 - Node ids must be simple alphanumeric (A, B, C, N1...). Put labels in brackets.
-- Output only valid Mermaid inside the tags. No comments, no markdown fences.`;
+- Output only valid Mermaid inside the tags. No comments, no markdown fences.
+
+Finally, locate every node on the image. Use box_2d as [ymin, xmin, ymax, xmax]
+normalized to a 1000x1000 grid, and set "label" to exactly the node label you
+used in the Mermaid. Wrap it in tags exactly like this:
+
+<boxes>
+[{"box_2d": [100, 200, 300, 400], "label": "Label"}]
+</boxes>
+
+Output only JSON inside the boxes tags.`;
+
+/** Pull node boxes out of the <boxes> tags, converting to 0-1 coords. */
+function extractBoxes(text: string) {
+  const m = text.match(/<boxes>([\s\S]*?)<\/boxes>/i);
+  if (!m) return [];
+  const json = m[1].replace(/```(?:json)?/gi, "").trim();
+  try {
+    const items = JSON.parse(json) as { box_2d: number[]; label: string }[];
+    return items
+      .filter((it) => Array.isArray(it.box_2d) && it.box_2d.length === 4)
+      .map((it) => {
+        const [ymin, xmin, ymax, xmax] = it.box_2d;
+        return {
+          label: String(it.label),
+          x: xmin / 1000,
+          y: ymin / 1000,
+          w: (xmax - xmin) / 1000,
+          h: (ymax - ymin) / 1000,
+        };
+      });
+  } catch {
+    return [];
+  }
+}
 
 /** Pull the mermaid source out of the tags, tolerating stray markdown fences. */
 function extractMermaid(text: string): { prose: string; mermaid: string | null } {
@@ -29,7 +63,10 @@ function extractMermaid(text: string): { prose: string; mermaid: string | null }
     .replace(/```(?:mermaid)?/gi, "")
     .trim();
 
-  const prose = text.replace(m[0], "").trim();
+  const prose = text
+    .replace(m[0], "")
+    .replace(/<boxes>[\s\S]*?<\/boxes>/i, "")
+    .trim();
   return { prose, mermaid: mermaid || null };
 }
 
@@ -73,6 +110,7 @@ export async function POST(req: Request) {
   const data = await res.json();
   const raw = data?.choices?.[0]?.message?.content?.trim() ?? "";
   const { prose, mermaid } = extractMermaid(raw);
+  const boxes = extractBoxes(raw);
 
-  return NextResponse.json({ text: prose || raw, mermaid, raw });
+  return NextResponse.json({ text: prose || raw, mermaid, boxes, raw });
 }
