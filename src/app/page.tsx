@@ -18,6 +18,9 @@ type MappedNode = {
   h?: number;
   /** SVG outline in 0-1 coords, present in segment mode. */
   path?: string;
+  /** Exact point in 0-1 coords, present in point mode. */
+  px?: number;
+  py?: number;
 };
 
 /** A mermaid edge located on the drawing (the arrowhead at its target). */
@@ -46,7 +49,7 @@ export default function Home() {
   const [nodes, setNodes] = useState<MappedNode[] | null>(null);
   const [edges, setEdges] = useState<MappedEdge[] | null>(null);
   const [mapping, setMapping] = useState(false);
-  const [segmentMode, setSegmentMode] = useState(false);
+  const [mapMode, setMapMode] = useState<"detect" | "point" | "segment">("detect");
   const [rawReply, setRawReply] = useState<string | null>(null);
   const [dumpText, setDumpText] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -185,7 +188,7 @@ export default function Home() {
       const res = await fetch("/api/map", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: capture, mermaid, mode: segmentMode ? "segment" : "detect" }),
+        body: JSON.stringify({ image: capture, mermaid, mode: mapMode }),
       });
       const data = await res.json();
       if (res.ok) {
@@ -247,7 +250,10 @@ export default function Home() {
       const out: { url: string; color: string; label: string }[] = [];
       for (let i = 0; i < located.length; i++) {
         const n = located[i];
-        const m = await sam.segmentBox(n.x ?? 0, n.y ?? 0, n.w ?? 0, n.h ?? 0);
+        const m =
+          n.px !== undefined && n.py !== undefined
+            ? await sam.segmentAt(n.px, n.py)
+            : await sam.segmentBox(n.x ?? 0, n.y ?? 0, n.w ?? 0, n.h ?? 0);
         if (!m) continue;
         const color = GLOW[i % GLOW.length];
         const url = maskToUrl(m.grid, m.width, m.height, color);
@@ -265,7 +271,7 @@ export default function Home() {
     const n = (v: number | undefined) => (v === undefined ? "?" : v.toFixed(3));
 
     L.push("=== PROMPT DUMP ===");
-    L.push(`captured: ${capture ? "yes" : "no"} | map mode: ${segmentMode ? "segment" : "detect"}`);
+    L.push(`captured: ${capture ? "yes" : "no"} | map mode: ${mapMode}`);
     L.push("");
 
     L.push("--- gemma description ---");
@@ -289,7 +295,7 @@ export default function Home() {
       for (const nd of nodes) {
         L.push(
           nd.found
-            ? `${nd.id}[${nd.label}]  x=${n(nd.x)} y=${n(nd.y)} w=${n(nd.w)} h=${n(nd.h)}${nd.path ? ` path=${nd.path.length}chars` : ""}`
+            ? `${nd.id}[${nd.label}]  x=${n(nd.x)} y=${n(nd.y)} w=${n(nd.w)} h=${n(nd.h)}${nd.px !== undefined ? ` point=(${n(nd.px)},${n(nd.py)})` : ""}${nd.path ? ` path=${nd.path.length}chars` : ""}`
             : `${nd.id}[${nd.label}]  NOT FOUND`,
         );
       }
@@ -418,15 +424,15 @@ export default function Home() {
           >
             {mapping ? "Mapping…" : "Map nodes to drawing"}
           </button>
-          <label className="flex cursor-pointer items-center gap-1.5 text-sm text-neutral-700">
-            <input
-              type="checkbox"
-              checked={segmentMode}
-              onChange={(e) => setSegmentMode(e.target.checked)}
-              className="h-4 w-4 accent-blue-600"
-            />
-            segment
-          </label>
+          <select
+            value={mapMode}
+            onChange={(e) => setMapMode(e.target.value as "detect" | "point" | "segment")}
+            className="rounded-md border-2 border-black px-2 py-1.5 text-sm text-black"
+          >
+            <option value="detect">detect (box)</option>
+            <option value="point">point</option>
+            <option value="segment">segment</option>
+          </select>
           <button
             onClick={onSam}
             disabled={!capture || segBusy || !(nodes ?? []).some((n) => n.found)}

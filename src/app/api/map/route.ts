@@ -18,6 +18,22 @@ async function detect(key: string, image: string, object: string): Promise<Box[]
   return (data?.objects ?? []) as Box[];
 }
 
+/** /point returns centre points (0–1 coords) rather than boxes. */
+async function point(
+  key: string,
+  image: string,
+  object: string,
+): Promise<{ x: number; y: number }[]> {
+  const res = await fetch("https://api.moondream.ai/v1/point", {
+    method: "POST",
+    headers: { "X-Moondream-Auth": key, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: MODEL, image_url: image, object }),
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (data?.points ?? []) as { x: number; y: number }[];
+}
+
 /**
  * /segment returns a single SVG path (0–1 coords) plus its bbox — an outline
  * of the thing rather than a rectangle. One object per call, and noticeably
@@ -51,6 +67,7 @@ export async function POST(req: Request) {
 
   const { image, mermaid, mode } = await req.json();
   const useSegment = mode === "segment";
+  const usePoint = mode === "point";
   if (typeof image !== "string" || !image.startsWith("data:image/")) {
     return NextResponse.json({ error: "expected a data: image URL" }, { status: 400 });
   }
@@ -65,6 +82,21 @@ export async function POST(req: Request) {
   const [nodeResults, arrowBoxes] = await Promise.all([
     Promise.all(
       parsedNodes.map(async (n) => {
+        if (usePoint) {
+          const pts = await point(key, image, n.label);
+          const p = pts[0];
+          // A point has no extent, so give it a small box for prompting.
+          const R = 0.02;
+          return {
+            id: n.id,
+            label: n.label,
+            found: Boolean(p),
+            ...(p
+              ? { x: p.x - R, y: p.y - R, w: R * 2, h: R * 2, px: p.x, py: p.y }
+              : {}),
+          };
+        }
+
         if (useSegment) {
           const seg = await segment(key, image, n.label);
           const b = seg?.bbox;
