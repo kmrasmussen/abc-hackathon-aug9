@@ -54,6 +54,9 @@ export default function Home() {
     { label: string; x: number; y: number; w: number; h: number }[]
   >([]);
   const [rawReply, setRawReply] = useState<string | null>(null);
+  const [tool, setTool] = useState<"point" | "draw" | "erase">("draw");
+  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  const [pointed, setPointed] = useState<{ x: number; y: number } | null>(null);
   const [auto, setAuto] = useState(true);
   const [countdown, setCountdown] = useState<number | null>(null);
   const historyRef = useRef<{ image: string; reply: string }[]>([]);
@@ -126,12 +129,38 @@ export default function Home() {
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   };
 
+  const ERASER_R = 28;
+
+  /** Erase by painting white — the canvas is opaque white, so this reads as rubbing out. */
+  const eraseAt = (ctx: CanvasRenderingContext2D, x: number, y: number) => {
+    ctx.save();
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(x, y, ERASER_R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  };
+
   const start = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const ctx = ctxOf();
     if (!ctx) return;
+    const p = posOf(e);
+
+    // Pointing doesn't modify the canvas; it just marks a spot.
+    if (tool === "point") {
+      const rect = e.currentTarget.getBoundingClientRect();
+      setPointed({ x: p.x / rect.width, y: p.y / rect.height });
+      return;
+    }
+
     e.currentTarget.setPointerCapture(e.pointerId);
     drawing.current = true;
-    const p = posOf(e);
+
+    if (tool === "erase") {
+      eraseAt(ctx, p.x, p.y);
+      return;
+    }
+
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
     ctx.lineTo(p.x, p.y);
@@ -139,10 +168,19 @@ export default function Home() {
   };
 
   const move = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const p = posOf(e);
+    if (tool === "erase") setCursor(p);
+
     if (!drawing.current) return;
     const ctx = ctxOf();
     if (!ctx) return;
-    const p = posOf(e);
+
+    if (tool === "erase") {
+      eraseAt(ctx, p.x, p.y);
+      return;
+    }
+    if (tool === "point") return;
+
     ctx.lineTo(p.x, p.y);
     ctx.stroke();
   };
@@ -451,11 +489,32 @@ export default function Home() {
     <main className="grid h-screen grid-cols-2 gap-4 overflow-hidden bg-white p-4 text-black">
       {/* left — the drawing surface, a square as large as the column allows */}
       <section className="flex min-h-0 flex-col gap-2">
-        <h2 className={label}>Draw</h2>
+        <div className="flex shrink-0 items-center gap-2">
+          <h2 className={label}>Draw</h2>
+          <div className="flex gap-1">
+            {(["point", "draw", "erase"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => {
+                  setTool(t);
+                  if (t !== "point") setPointed(null);
+                  if (t !== "erase") setCursor(null);
+                }}
+                className={`rounded-md border-2 px-2.5 py-1 text-xs font-medium transition-colors ${
+                  tool === t
+                    ? "border-black bg-black text-white"
+                    : "border-neutral-300 text-neutral-600 hover:bg-neutral-100"
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="flex min-h-0 flex-1 items-start justify-center">
           <div
             ref={wrapRef}
-            className="aspect-square h-full max-w-full overflow-hidden rounded-lg border-2 border-black"
+            className="relative aspect-square h-full max-w-full overflow-hidden rounded-lg border-2 border-black"
             style={{ maxHeight: "100%" }}
           >
             <canvas
@@ -463,10 +522,33 @@ export default function Home() {
               onPointerDown={start}
               onPointerMove={move}
               onPointerUp={stop}
-              onPointerLeave={stop}
               onPointerCancel={stop}
-              className="block h-full w-full cursor-crosshair touch-none bg-white"
+              onPointerLeave={() => {
+                setCursor(null);
+                stop();
+              }}
+              className={`block h-full w-full touch-none bg-white ${
+                tool === "erase" ? "cursor-none" : "cursor-crosshair"
+              }`}
             />
+            {/* eraser ring follows the pointer so its size is visible */}
+            {tool === "erase" && cursor && (
+              <div
+                className="pointer-events-none absolute rounded-full border-2 border-neutral-400"
+                style={{
+                  left: cursor.x - 28,
+                  top: cursor.y - 28,
+                  width: 56,
+                  height: 56,
+                }}
+              />
+            )}
+            {pointed && (
+              <div
+                className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-fuchsia-600 ring-2 ring-white"
+                style={{ left: `${pointed.x * 100}%`, top: `${pointed.y * 100}%` }}
+              />
+            )}
           </div>
         </div>
       </section>
