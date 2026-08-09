@@ -374,6 +374,23 @@ export default function Home() {
     L.push(`--- edges (${committed?.edges.length ?? 0}) ---`);
     for (const e of committed?.edges ?? [])
       L.push(`${e.from} -> ${e.to}   x=${n(e.x)} y=${n(e.y)} w=${n(e.w)} h=${n(e.h)}`);
+    L.push("");
+
+    L.push(`--- event log (${logged.length}) ---`);
+    if (!logged.length) L.push("(nothing yet)");
+    const t0 = logged[0]?.at;
+    for (const ev of logged) {
+      const dt = t0 === undefined ? 0 : (ev.at - t0) / 1000;
+      const where = ev.box
+        ? ` at=(${n(ev.box.x)},${n(ev.box.y)} ${n(ev.box.w)}x${n(ev.box.h)})`
+        : "";
+      const text = ev.text ? ` "${ev.text}"` : "";
+      const match = ev.match ? `  -> ${ev.match}` : "";
+      L.push(`+${dt.toFixed(1)}s ${ev.kind.padEnd(6)}${text}${where}${match}`);
+    }
+    L.push("");
+    L.push(`stt: ${sttOn ? (stt.live ? "on/live" : "on") : "off"}${stt.error ? ` err=${stt.error}` : ""}`);
+
     return L.join("\n");
   };
 
